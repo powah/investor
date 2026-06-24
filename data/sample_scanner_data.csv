@@ -1,0 +1,6 @@
+ticker,price,gap_pct,rel_volume,float_m,market_cap_m,spread_pct,catalyst_type,above_vwap,news_headline
+SINT,2.35,42,18.4,8.2,21,0.9,FDA,true,Positive Phase 2 clinical data announced
+ABVC,3.12,27,9.1,12.5,38,1.2,Contract,true,Company announces new distribution agreement
+XYZ,1.84,16,4.3,55.0,120,2.4,Vague PR,false,Company provides strategic update
+KAVL,1.18,19,7.7,15.3,34,1.8,Partnership,true,Company announces strategic distribution partnership
+MULN,0.72,11,6.1,188.0,96,3.1,Offering,false,Company files financing update

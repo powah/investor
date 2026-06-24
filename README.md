@@ -52,3 +52,26 @@ See the `docs/` folder:
 - `local-development.md`
 - `cost-plan.md`
 - `roadmap.md`
+
+## Implemented MVP
+
+The repository now includes the local-first MVP described in the docs:
+
+- `apps/api`: FastAPI backend with PostgreSQL persistence, CSV seeding, scoring, watchlist, catalyst, risk settings, trade planner, journal, analytics, and risk-state endpoints.
+- `apps/web`: Next.js + TypeScript + Tailwind dashboard for the scanner workflow, risk planning, journaling, and analytics.
+- `data`: sample scanner, manual news, and trades CSV files.
+- `docker-compose.yml`: PostgreSQL, Redis, API, and web services for local runtime.
+
+## Run locally
+
+Install Docker, then start the stack from the repo root:
+
+```bash
+docker compose up --build
+```
+
+Local URLs:
+
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API health check: http://localhost:8000/health

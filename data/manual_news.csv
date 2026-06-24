@@ -1,0 +1,4 @@
+ticker,published_time,source,headline,catalyst_type,quality_score
+SINT,2026-06-24T08:05:00,Manual,Positive Phase 2 clinical data announced,FDA,20
+ABVC,2026-06-24T08:30:00,Manual,Company announces new distribution agreement,Contract,16
+XYZ,2026-06-24T09:00:00,Manual,Company provides strategic update,Vague PR,4

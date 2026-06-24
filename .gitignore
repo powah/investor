@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+postgres_data/
