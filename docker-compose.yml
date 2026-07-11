@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: trading
       POSTGRES_DB: trading_tool
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +20,7 @@ services:
     image: redis:7
     container_name: trading_redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   api:
     build:
@@ -29,8 +29,20 @@ services:
     container_name: trading_api
     env_file:
       - .env.example
+    environment:
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+      ALPACA_TRADING_BASE_URL: ${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}
+      ALPACA_DATA_BASE_URL: ${ALPACA_DATA_BASE_URL:-https://data.alpaca.markets}
+      ALPACA_SCANNER_FEED: ${ALPACA_SCANNER_FEED:-delayed_sip}
+      ALPACA_EXECUTION_FEED: ${ALPACA_EXECUTION_FEED:-iex}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      AUTOMATION_POLL_SECONDS: ${AUTOMATION_POLL_SECONDS:-5}
+      AUTOMATION_QUOTE_MAX_AGE_SECONDS: ${AUTOMATION_QUOTE_MAX_AGE_SECONDS:-60}
+      AUTOMATION_MAX_PRICE_DEVIATION_PCT: ${AUTOMATION_MAX_PRICE_DEVIATION_PCT:-2.0}
+      ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -38,6 +50,45 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: trading_paper_automation_worker
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - .env.example
+    environment:
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+      ALPACA_TRADING_BASE_URL: ${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}
+      ALPACA_DATA_BASE_URL: ${ALPACA_DATA_BASE_URL:-https://data.alpaca.markets}
+      ALPACA_SCANNER_FEED: ${ALPACA_SCANNER_FEED:-delayed_sip}
+      ALPACA_EXECUTION_FEED: ${ALPACA_EXECUTION_FEED:-iex}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      AUTOMATION_POLL_SECONDS: ${AUTOMATION_POLL_SECONDS:-5}
+      AUTOMATION_QUOTE_MAX_AGE_SECONDS: ${AUTOMATION_QUOTE_MAX_AGE_SECONDS:-60}
+      AUTOMATION_MAX_PRICE_DEVIATION_PCT: ${AUTOMATION_MAX_PRICE_DEVIATION_PCT:-2.0}
+      ALLOW_LIVE_TRADING: ${ALLOW_LIVE_TRADING:-false}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
 
   web:
     build:
@@ -52,9 +103,10 @@ services:
       API_INTERNAL_BASE_URL: http://api:8000
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

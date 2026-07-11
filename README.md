@@ -1,33 +1,44 @@
 # Small-Cap Catalyst Momentum Trading Tool
 
-A private trading decision-support tool for scanning, ranking, planning, and journaling small-cap catalyst-driven momentum trades.
-
-This project is designed for personal research and discipline. It should start as a local tool using manual, delayed, or historical data before adding paid real-time data or broker execution.
-
-## Core idea
+A private, local-first trading workspace for scanning, ranking, planning, journaling, and cautiously paper-testing small-cap catalyst momentum trades.
 
 The tool helps answer:
 
 > Which small-cap stocks are worth watching today, why are they moving, where is the risk, and is the trade valid?
 
-It is not intended to be a guaranteed trading system, signal service, or automatic trading bot.
+It is not a guaranteed trading system, signal service, or live trading bot. External headlines and filings are research inputs, not verified catalysts until a person reviews and promotes them. Paper results are simulations and should not be treated as evidence that live execution will behave the same way.
 
-## Recommended first version
+## Current implementation
 
-Build a local MVP with:
+The repository contains a usable local workflow from discovery through guarded paper execution:
 
-- Scanner simulator using CSV/manual data
-- Catalyst input and classification
-- Score ranking from 0 to 100
-- Risk calculator
-- Watchlist
-- Trade planner
-- Journal
-- Basic analytics
+- Accessible Scanner, Watchlist, Trade planner, Journal, Analytics, Operations, and Risk rules workspaces.
+- Ranked scanner with search, workflow filters, CSV upload, score evidence, catalyst history, and risk warnings.
+- Watch/unwatch state, persisted watch notes, and direct Watchlist → Planner → Journal handoffs.
+- Pre-trade sizing with entry, stop, target, position size, max loss, R multiple, warnings, and hard blockers.
+- Trade plans, journal entries, process tags, plan-adherence tracking, and basic analytics.
+- Free external-data adapters for Alpaca Basic market snapshots and news plus public SEC EDGAR submissions.
+- Persisted source provenance, timestamps, delay/consolidation labels, provider request IDs, and manual promotion of external events into scored catalysts.
+- A swappable broker contract with an Alpaca paper adapter for account, market clock, positions, orders, deterministic client-order lookup, protected limit-order submission, cancellation, and reconciliation.
+- A guarded execution-intent workflow with audit records. It starts disabled, with the kill switch engaged, automatic submission disabled, and manual approval mandatory.
+- A dedicated local worker that polls paper execution state every `AUTOMATION_POLL_SECONDS`. When the broker is safely configured for paper it reconciles active intents first, even while submission is disarmed.
 
-## Local-first approach
+The paper-execution slice accepts limit orders with bracket or OTO protection only. It does not blindly retry an order after a timeout or uncertain response; it reconciles using the deterministic client order ID. Live execution is hard-disabled in this release.
 
-Start locally to avoid costs:
+## Free data path
+
+The two configured stock feeds serve different purposes and must not be treated as interchangeable:
+
+| Purpose | Default source | Timing | Market coverage | Intended use |
+| --- | --- | --- | --- | --- |
+| Scanner research | Alpaca `delayed_sip` | 15-minute delayed | Consolidated US SIP | Broad market context, ranking, and review |
+| Paper execution checks | Alpaca `iex` | Real time | IEX only; not consolidated | Freshness/deviation checks before a paper order |
+| Headlines | Alpaca News REST | Provider/account dependent | Symbol-linked news | Human catalyst review |
+| Filings | SEC EDGAR public APIs | Poll-based | SEC submissions | Human filing/catalyst review |
+
+Real-time IEX represents one exchange and is not an NBBO or full-market SIP view. Delayed SIP is consolidated but stale by design, so it is not used as the execution quote. This project does not claim paid real-time SIP, paid news, or streaming-feed support.
+
+## Local-first stack
 
 ```text
 Frontend: Next.js + TypeScript + TailwindCSS
@@ -38,38 +49,32 @@ Charts: TradingView Lightweight Charts
 Runtime: Docker Compose
 ```
 
-Only add paid real-time data after the local workflow proves useful.
+## Configure and run
 
-## Documentation
+Install Docker, then create a local environment file from the repository root:
 
-See the `docs/` folder:
+```bash
+cp .env.example .env
+```
 
-- `project-plan.md`
-- `mvp-scope.md`
-- `tech-stack.md`
-- `scoring-model.md`
-- `risk-rules.md`
-- `local-development.md`
-- `cost-plan.md`
-- `roadmap.md`
+Edit `.env` and add:
 
-## Current implementation
+```dotenv
+ALPACA_API_KEY_ID=your-paper-key-id
+ALPACA_API_SECRET_KEY=your-paper-secret-key
+SEC_USER_AGENT=Your Name your-contact-email@example.com
+```
 
-The repository contains a usable local decision-support MVP covering the manual workflow from discovery through review:
+Create free **paper** credentials in the Alpaca dashboard; paper and live credentials are different. Use a real, contactable identity for `SEC_USER_AGENT`, as required by SEC fair-access guidance. Keep these safety settings unchanged:
 
-- Accessible workspace navigation for Scanner, Watchlist, Trade planner, Journal, Analytics, and Risk rules.
-- Ranked scanner with search, workflow filters, CSV upload, visible score evidence, catalyst history, and complete risk warnings.
-- Explicit watch/unwatch state, a dedicated watchlist view, persisted watch notes, and a direct watchlist-to-plan flow.
-- Live pre-trade sizing with entry, stop, target, position size, max loss, R multiple, warnings, and hard blockers.
-- Trade plan persistence, plan-to-journal handoff, execution notes, mistake tags, plan-adherence tracking, and basic analytics.
-- FastAPI endpoints for scanner imports, catalyst records, watchlists, risk settings/state, non-persisting plan preview, plans, journal entries, and analytics.
-- PostgreSQL persistence, Redis in the local stack, Docker Compose runtime, and backend tests for imports and risk enforcement.
+```dotenv
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_SCANNER_FEED=delayed_sip
+ALPACA_EXECUTION_FEED=iex
+ALLOW_LIVE_TRADING=false
+```
 
-This is still a local manual-data system, intentionally. Immutable scanner snapshots, date-scoped watchlist history, replay, external market/news feeds, broker connections, and execution automation remain later roadmap phases. See `docs/roadmap.md`.
-
-## Run locally
-
-Install Docker, then start the stack from the repo root:
+Start or rebuild the stack after changing `.env`:
 
 ```bash
 docker compose up --build
@@ -81,7 +86,48 @@ Local URLs:
 - Backend API: http://localhost:8000
 - API health check: http://localhost:8000/health
 
+Docker publishes the web app, API, PostgreSQL, and Redis on `127.0.0.1` only. This local release does not implement user authentication or CSRF protection, so do not expose these ports through a LAN bind, reverse proxy, tunnel, or public host. A remotely reachable deployment requires an authenticated operator boundary, CSRF protection, TLS, and secrets management first.
+
+Open the **Operations** tab to inspect provider status, sync market/news/filing data, review the paper account and orders, and manage guarded paper intents. External news and SEC records remain unscored until you review and promote them as catalysts.
+
 The web app calls the API through a same-origin `/api` proxy. Docker resolves that proxy to the API service, while local Next.js development defaults to `http://localhost:8000`.
+
+## Paper automation safety
+
+- Automation is disabled by default.
+- The kill switch is engaged by default and blocks new submissions.
+- Broker reconciliation remains active when safely configured for paper; disabling submission or engaging the kill switch does not abandon uncertain/open paper intents.
+- Every execution intent requires explicit manual approval; that requirement cannot be disabled.
+- Only limit entries with a stop-protected bracket or OTO order are supported. Extended-hours execution is disabled.
+- Fresh-quote, price-deviation, account, clock, plan, daily-risk, order-count, and notional guards are rechecked at submission time.
+- Kill state, final quote freshness, approval warnings, and the daily submission reservation are serialized through one database execution gate immediately before the broker request.
+- Every intent receives a stable client order ID. Existing provider state is looked up and reconciled before any uncertain order is considered for submission again.
+- A timeout after an order write is an unknown outcome, not permission to retry.
+- Filled bracket/OTO parents remain under reconciliation until a protective stop is confirmed and an exit leg closes the position. Missing or rejected protection engages the global kill switch and remains visible as `protection_failed`.
+- The worker can auto-submit only an already manually approved intent, and only when automation is enabled, auto-submit is separately enabled, and the kill switch is released.
+- Only the exact Alpaca paper endpoint is accepted. Setting `ALLOW_LIVE_TRADING=true` blocks this release rather than enabling live orders.
+
+See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
+
+## Documentation
+
+- [Project plan](docs/project-plan.md)
+- [MVP scope](docs/mvp-scope.md)
+- [Technology stack](docs/tech-stack.md)
+- [Scoring model](docs/scoring-model.md)
+- [Risk rules](docs/risk-rules.md)
+- [Local development](docs/local-development.md)
+- [Cost plan](docs/cost-plan.md)
+- [Roadmap](docs/roadmap.md)
+
+## Current limitations
+
+- Historical candle replay and immutable date-scoped scanner sessions are not implemented.
+- Market, news, and filing imports are manually triggered REST syncs. The background worker polls only paper-order reconciliation and guarded eligibility; it is not a market/news streaming consumer.
+- Alpaca News availability and freshness can vary with the free account entitlement.
+- Paid real-time SIP is represented as unverified and disabled; configuration alone is never reported as entitlement.
+- Automatic fill-to-journal import and durable streaming order-event ingestion remain future work.
+- Live broker execution and paid data are not implemented.
 
 ## Verify changes
 
@@ -94,7 +140,7 @@ npm run lint
 npm run build
 ```
 
-Backend (using the project virtual environment):
+Backend:
 
 ```bash
 cd apps/api
