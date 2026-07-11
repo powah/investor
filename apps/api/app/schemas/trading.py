@@ -17,9 +17,9 @@ class ScannerSymbolBase(BaseModel):
     catalyst_type: Optional[str] = None
     above_vwap: bool = False
     news_headline: Optional[str] = None
-    clean_daily_chart_room: bool = True
-    holding_key_level: bool = True
-    no_dilution_red_flag: bool = True
+    clean_daily_chart_room: bool = False
+    holding_key_level: bool = False
+    no_dilution_red_flag: bool = False
 
 
 class ScannerSymbolCreate(ScannerSymbolBase):
@@ -41,6 +41,9 @@ class ScannerSymbolRead(ScannerSymbolBase):
     label: str
     reasons: list[str]
     risk_warnings: list[str]
+    latest_catalyst_quality_score: Optional[int]
+    latest_catalyst_published_time: Optional[datetime]
+    latest_catalyst_is_fresh: bool
 
 
 class CatalystCreate(BaseModel):
@@ -76,7 +79,7 @@ class TradePlanCreate(BaseModel):
     plan_date: date = Field(default_factory=date.today)
     ticker: str = Field(min_length=1, max_length=12)
     account_size: Optional[float] = Field(default=None, gt=0)
-    max_risk_per_trade_pct: Optional[float] = Field(default=None, gt=0)
+    max_risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
     entry_price: float = Field(gt=0)
     stop_price: Optional[float] = Field(default=None, gt=0)
     target_price: Optional[float] = Field(default=None, gt=0)
@@ -99,6 +102,15 @@ class TradePlanRead(BaseModel):
     r_multiple: Optional[float]
     warnings: list[str]
     created_at: datetime
+
+
+class TradePlanPreviewRead(BaseModel):
+    risk_per_share: float
+    shares: int
+    max_loss: float
+    r_multiple: Optional[float]
+    warnings: list[str]
+    blockers: list[str]
 
 
 class JournalCreate(BaseModel):
@@ -139,7 +151,7 @@ class JournalRead(BaseModel):
 
 class RiskSettingsUpdate(BaseModel):
     account_size: Optional[float] = Field(default=None, gt=0)
-    max_risk_per_trade_pct: Optional[float] = Field(default=None, gt=0)
+    max_risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
     max_trades_per_day: Optional[int] = Field(default=None, ge=1)
     max_consecutive_losses: Optional[int] = Field(default=None, ge=1)

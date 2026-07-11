@@ -18,6 +18,9 @@ export type ScannerSymbol = {
   label: string;
   reasons: string[];
   risk_warnings: string[];
+  latest_catalyst_quality_score: number | null;
+  latest_catalyst_published_time: string | null;
+  latest_catalyst_is_fresh: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -28,6 +31,17 @@ export type WatchlistItem = {
   notes: string | null;
   created_at: string;
   symbol: ScannerSymbol | null;
+};
+
+export type Catalyst = {
+  id: number;
+  ticker: string;
+  published_time: string;
+  source: string;
+  headline: string;
+  catalyst_type: string;
+  quality_score: number;
+  created_at: string;
 };
 
 export type RiskSettings = {

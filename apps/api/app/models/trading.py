@@ -23,9 +23,9 @@ class ScannerSymbol(Base):
     catalyst_type: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     above_vwap: Mapped[bool] = mapped_column(Boolean, default=False)
     news_headline: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    clean_daily_chart_room: Mapped[bool] = mapped_column(Boolean, default=True)
-    holding_key_level: Mapped[bool] = mapped_column(Boolean, default=True)
-    no_dilution_red_flag: Mapped[bool] = mapped_column(Boolean, default=True)
+    clean_daily_chart_room: Mapped[bool] = mapped_column(Boolean, default=False)
+    holding_key_level: Mapped[bool] = mapped_column(Boolean, default=False)
+    no_dilution_red_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="candidate")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -1,6 +1,7 @@
 from datetime import date
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -17,12 +18,18 @@ from app.schemas.trading import (
     ScannerSymbolCreate,
     ScannerSymbolRead,
     TradePlanCreate,
+    TradePlanPreviewRead,
     TradePlanRead,
     WatchlistCreate,
     WatchlistRead,
 )
 from app.services.analytics import summarize_journal
-from app.services.risk import evaluate_trade_plan
+from app.services.risk import RiskResult, evaluate_trade_plan
+from app.services.scanner_import import (
+    ScannerCsvEncodingError,
+    ScannerCsvValidationError,
+    import_scanner_csv_data,
+)
 from app.services.scoring import score_symbol
 from app.services.seed import ensure_risk_settings, import_sample_scanner_data
 
@@ -33,11 +40,25 @@ def _ticker(value: str) -> str:
     return value.strip().upper()
 
 
-def _scanner_read(symbol: ScannerSymbol) -> ScannerSymbolRead:
+def _latest_catalyst(ticker: str, db: Session) -> Optional[Catalyst]:
+    return (
+        db.query(Catalyst)
+        .filter(Catalyst.ticker == ticker)
+        .order_by(Catalyst.published_time.desc(), Catalyst.id.desc())
+        .first()
+    )
+
+
+def _scanner_read(symbol: ScannerSymbol, db: Session) -> ScannerSymbolRead:
+    catalyst = _latest_catalyst(symbol.ticker, db)
+    symbol_data = {**symbol.__dict__}
+    if catalyst is not None:
+        symbol_data["catalyst_type"] = catalyst.catalyst_type
+        symbol_data["news_headline"] = catalyst.headline
     data = ScannerSymbolRead.model_validate(
         {
-            **symbol.__dict__,
-            **score_symbol(symbol),
+            **symbol_data,
+            **score_symbol(symbol, catalyst),
         }
     )
     return data
@@ -50,8 +71,35 @@ def _watchlist_read(item: WatchlistItem, db: Session) -> WatchlistRead:
         ticker=item.ticker,
         notes=item.notes,
         created_at=item.created_at,
-        symbol=_scanner_read(symbol) if symbol else None,
+        symbol=_scanner_read(symbol, db) if symbol else None,
     )
+
+
+def _evaluate_trade_plan_payload(
+    payload: TradePlanCreate,
+    db: Session,
+) -> tuple[str, float, float, RiskResult]:
+    ticker = _ticker(payload.ticker)
+    settings = ensure_risk_settings(db)
+    symbol = db.query(ScannerSymbol).filter(ScannerSymbol.ticker == ticker).one_or_none()
+    catalyst = _latest_catalyst(ticker, db)
+    journal_entries = db.query(JournalEntry).order_by(JournalEntry.trade_date.desc(), JournalEntry.id.desc()).all()
+    account_size = payload.account_size or settings.account_size
+    max_risk_pct = payload.max_risk_per_trade_pct or settings.max_risk_per_trade_pct
+    result = evaluate_trade_plan(
+        ticker=ticker,
+        trade_date=payload.plan_date,
+        account_size=account_size,
+        max_risk_per_trade_pct=max_risk_pct,
+        entry_price=payload.entry_price,
+        stop_price=payload.stop_price,
+        target_price=payload.target_price,
+        symbol=symbol,
+        catalyst=catalyst,
+        settings=settings,
+        journal_entries=journal_entries,
+    )
+    return ticker, account_size, max_risk_pct, result
 
 
 @router.get("/health")
@@ -62,7 +110,7 @@ def health() -> dict:
 @router.get("/scanner", response_model=list[ScannerSymbolRead])
 def list_scanner(db: Session = Depends(get_db)) -> list[ScannerSymbolRead]:
     symbols = db.query(ScannerSymbol).all()
-    return sorted([_scanner_read(symbol) for symbol in symbols], key=lambda item: item.score, reverse=True)
+    return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)
 
 
 @router.post("/scanner", response_model=ScannerSymbolRead, status_code=status.HTTP_201_CREATED)
@@ -77,13 +125,31 @@ def upsert_scanner_symbol(payload: ScannerSymbolCreate, db: Session = Depends(ge
         setattr(symbol, field, value)
     db.commit()
     db.refresh(symbol)
-    return _scanner_read(symbol)
+    return _scanner_read(symbol, db)
+
+
+@router.post("/scanner/import-csv", response_model=list[ScannerSymbolRead])
+async def import_scanner_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> list[ScannerSymbolRead]:
+    content = await file.read()
+    try:
+        symbols = import_scanner_csv_data(db, content)
+    except ScannerCsvEncodingError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ScannerCsvValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": str(exc), "errors": exc.errors},
+        ) from exc
+    return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)
 
 
 @router.post("/scanner/import-sample", response_model=list[ScannerSymbolRead])
 def import_sample_scanner(db: Session = Depends(get_db)) -> list[ScannerSymbolRead]:
     symbols = import_sample_scanner_data(db)
-    return sorted([_scanner_read(symbol) for symbol in symbols], key=lambda item: item.score, reverse=True)
+    return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)
 
 
 @router.patch("/scanner/{ticker}/status", response_model=ScannerSymbolRead)
@@ -108,7 +174,7 @@ def update_scanner_status(
 
     db.commit()
     db.refresh(symbol)
-    return _scanner_read(symbol)
+    return _scanner_read(symbol, db)
 
 
 @router.get("/catalysts", response_model=list[CatalystRead])
@@ -190,27 +256,22 @@ def list_trade_plans(db: Session = Depends(get_db)) -> list[TradePlan]:
     return db.query(TradePlan).order_by(TradePlan.created_at.desc()).all()
 
 
+@router.post("/trade-plans/preview", response_model=TradePlanPreviewRead)
+def preview_trade_plan(payload: TradePlanCreate, db: Session = Depends(get_db)) -> TradePlanPreviewRead:
+    _, _, _, result = _evaluate_trade_plan_payload(payload, db)
+    return TradePlanPreviewRead(
+        risk_per_share=result.risk_per_share,
+        shares=result.shares,
+        max_loss=result.max_loss,
+        r_multiple=result.r_multiple,
+        warnings=result.warnings,
+        blockers=result.blockers,
+    )
+
+
 @router.post("/trade-plans", response_model=TradePlanRead, status_code=status.HTTP_201_CREATED)
 def create_trade_plan(payload: TradePlanCreate, db: Session = Depends(get_db)) -> TradePlan:
-    ticker = _ticker(payload.ticker)
-    settings = ensure_risk_settings(db)
-    symbol = db.query(ScannerSymbol).filter(ScannerSymbol.ticker == ticker).one_or_none()
-    journal_entries = db.query(JournalEntry).order_by(JournalEntry.trade_date.desc(), JournalEntry.id.desc()).all()
-
-    account_size = payload.account_size or settings.account_size
-    max_risk_pct = payload.max_risk_per_trade_pct or settings.max_risk_per_trade_pct
-    result = evaluate_trade_plan(
-        ticker=ticker,
-        trade_date=payload.plan_date,
-        account_size=account_size,
-        max_risk_per_trade_pct=max_risk_pct,
-        entry_price=payload.entry_price,
-        stop_price=payload.stop_price,
-        target_price=payload.target_price,
-        symbol=symbol,
-        settings=settings,
-        journal_entries=journal_entries,
-    )
+    ticker, account_size, max_risk_pct, result = _evaluate_trade_plan_payload(payload, db)
 
     if result.blockers:
         raise HTTPException(

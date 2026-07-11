@@ -1,4 +1,3 @@
-import csv
 from datetime import datetime
 from pathlib import Path
 
@@ -6,10 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.trading import Catalyst, RiskSettings, ScannerSymbol
-
-
-def _bool_from_csv(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "y"}
+from app.services.scanner_import import import_scanner_csv_data
 
 
 def _sample_path() -> Path:
@@ -42,31 +38,7 @@ def import_sample_scanner_data(db: Session) -> list[ScannerSymbol]:
     if not path.exists():
         return []
 
-    symbols: list[ScannerSymbol] = []
-    with path.open(newline="") as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            ticker = row["ticker"].strip().upper()
-            symbol = db.query(ScannerSymbol).filter(ScannerSymbol.ticker == ticker).one_or_none()
-            if symbol is None:
-                symbol = ScannerSymbol(ticker=ticker)
-                db.add(symbol)
-
-            symbol.price = float(row["price"])
-            symbol.gap_pct = float(row["gap_pct"])
-            symbol.rel_volume = float(row["rel_volume"])
-            symbol.float_m = float(row["float_m"])
-            symbol.market_cap_m = float(row["market_cap_m"])
-            symbol.spread_pct = float(row["spread_pct"])
-            symbol.catalyst_type = row["catalyst_type"].strip()
-            symbol.above_vwap = _bool_from_csv(row["above_vwap"])
-            symbol.news_headline = row["news_headline"].strip()
-            symbols.append(symbol)
-
-    db.commit()
-    for symbol in symbols:
-        db.refresh(symbol)
-    return symbols
+    return import_scanner_csv_data(db, path.read_bytes())
 
 
 def seed_database(db: Session) -> None:

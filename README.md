@@ -53,14 +53,19 @@ See the `docs/` folder:
 - `cost-plan.md`
 - `roadmap.md`
 
-## Implemented MVP
+## Current implementation
 
-The repository now includes the local-first MVP described in the docs:
+The repository contains a usable local decision-support MVP covering the manual workflow from discovery through review:
 
-- `apps/api`: FastAPI backend with PostgreSQL persistence, CSV seeding, scoring, watchlist, catalyst, risk settings, trade planner, journal, analytics, and risk-state endpoints.
-- `apps/web`: Next.js + TypeScript + Tailwind dashboard for the scanner workflow, risk planning, journaling, and analytics.
-- `data`: sample scanner, manual news, and trades CSV files.
-- `docker-compose.yml`: PostgreSQL, Redis, API, and web services for local runtime.
+- Accessible workspace navigation for Scanner, Watchlist, Trade planner, Journal, Analytics, and Risk rules.
+- Ranked scanner with search, workflow filters, CSV upload, visible score evidence, catalyst history, and complete risk warnings.
+- Explicit watch/unwatch state, a dedicated watchlist view, persisted watch notes, and a direct watchlist-to-plan flow.
+- Live pre-trade sizing with entry, stop, target, position size, max loss, R multiple, warnings, and hard blockers.
+- Trade plan persistence, plan-to-journal handoff, execution notes, mistake tags, plan-adherence tracking, and basic analytics.
+- FastAPI endpoints for scanner imports, catalyst records, watchlists, risk settings/state, non-persisting plan preview, plans, journal entries, and analytics.
+- PostgreSQL persistence, Redis in the local stack, Docker Compose runtime, and backend tests for imports and risk enforcement.
+
+This is still a local manual-data system, intentionally. Immutable scanner snapshots, date-scoped watchlist history, replay, external market/news feeds, broker connections, and execution automation remain later roadmap phases. See `docs/roadmap.md`.
 
 ## Run locally
 
@@ -75,3 +80,23 @@ Local URLs:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
 - API health check: http://localhost:8000/health
+
+The web app calls the API through a same-origin `/api` proxy. Docker resolves that proxy to the API service, while local Next.js development defaults to `http://localhost:8000`.
+
+## Verify changes
+
+Frontend:
+
+```bash
+cd apps/web
+npm run typecheck
+npm run lint
+npm run build
+```
+
+Backend (using the project virtual environment):
+
+```bash
+cd apps/api
+../../.venv/bin/python -m pytest -q
+```

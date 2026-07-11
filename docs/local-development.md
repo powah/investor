@@ -83,6 +83,10 @@ ABVC,3.12,27,9.1,12.5,38,1.2,Contract,true,Company announces new distribution ag
 XYZ,1.84,16,4.3,55.0,120,2.4,Vague PR,false,Company provides strategic update
 ```
 
+The Scanner view accepts UTF-8 CSV uploads with these required columns. The optional boolean columns `clean_daily_chart_room`, `holding_key_level`, and `no_dilution_red_flag` make the corresponding scoring evidence explicit. Use `true` or `false`; unverified values should not be treated as positive evidence.
+
+The browser calls `/api/*` on the Next.js origin. During local frontend development, Next.js proxies those requests to `API_INTERNAL_BASE_URL` (default `http://localhost:8000`). Docker Compose sets the internal destination to `http://api:8000`.
+
 ## First development steps
 
 1. Create repo structure.

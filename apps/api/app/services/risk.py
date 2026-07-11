@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from math import floor
 from typing import Optional
 
-from app.models.trading import JournalEntry, RiskSettings, ScannerSymbol
+from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol
 from app.services.scoring import score_symbol
 
 
@@ -27,8 +28,12 @@ def _daily_trade_count(entries: list[JournalEntry], trade_date: date) -> int:
     return sum(1 for entry in entries if entry.trade_date == trade_date)
 
 
-def _consecutive_losses(entries: list[JournalEntry]) -> int:
-    ordered = sorted(entries, key=lambda entry: (entry.trade_date, entry.id), reverse=True)
+def _consecutive_losses(entries: list[JournalEntry], trade_date: date) -> int:
+    ordered = sorted(
+        (entry for entry in entries if entry.trade_date == trade_date),
+        key=lambda entry: entry.id,
+        reverse=True,
+    )
     losses = 0
     for entry in ordered:
         if entry.pnl < 0:
@@ -48,6 +53,7 @@ def evaluate_trade_plan(
     stop_price: Optional[float],
     target_price: Optional[float],
     symbol: Optional[ScannerSymbol],
+    catalyst: Optional[Catalyst],
     settings: RiskSettings,
     journal_entries: list[JournalEntry],
 ) -> RiskResult:
@@ -77,13 +83,19 @@ def evaluate_trade_plan(
     if _daily_trade_count(journal_entries, trade_date) >= settings.max_trades_per_day:
         blockers.append("Daily lockout: Max trades per day reached.")
 
-    if _consecutive_losses(journal_entries) >= settings.max_consecutive_losses:
+    if _consecutive_losses(journal_entries, trade_date) >= settings.max_consecutive_losses:
         blockers.append("Daily lockout: Max consecutive losses reached.")
 
-    risk_per_share = entry_price - stop_price
-    cash_risk = account_size * (max_risk_per_trade_pct / 100)
-    shares = floor(cash_risk / risk_per_share) if risk_per_share > 0 else 0
-    max_loss = shares * risk_per_share
+    entry_price_decimal = Decimal(str(entry_price))
+    stop_price_decimal = Decimal(str(stop_price))
+    risk_per_share_decimal = entry_price_decimal - stop_price_decimal
+    cash_risk_decimal = (
+        Decimal(str(account_size)) * Decimal(str(max_risk_per_trade_pct)) / Decimal("100")
+    )
+    shares = floor(cash_risk_decimal / risk_per_share_decimal) if risk_per_share_decimal > 0 else 0
+    max_loss_decimal = shares * risk_per_share_decimal
+    risk_per_share = float(risk_per_share_decimal)
+    max_loss = float(max_loss_decimal)
 
     if risk_per_share / entry_price > 0.15:
         warnings.append("Risk warning: Risk per share is more than 15% of entry.")
@@ -92,7 +104,7 @@ def evaluate_trade_plan(
         blockers.append("Invalid trade plan: Position size is zero at the selected risk.")
 
     if shares > settings.max_position_shares:
-        warnings.append("Risk warning: Position size exceeds your defined share limit.")
+        blockers.append("Invalid trade plan: Position size exceeds your defined share limit.")
 
     r_multiple = None
     if target_price is not None and risk_per_share > 0:
@@ -103,14 +115,14 @@ def evaluate_trade_plan(
     if symbol is None:
         warnings.append(f"Caution: {ticker.upper()} is not in the scanner table.")
     else:
-        scored = score_symbol(symbol)
+        scored = score_symbol(symbol, catalyst)
         if scored["score"] < settings.min_score_to_plan:
             warnings.append("Risk warning: Score is below your minimum required plan score.")
 
         if symbol.spread_pct > settings.max_spread_pct:
             warnings.append("Caution: Spread is wider than your allowed threshold.")
 
-        if not symbol.news_headline:
+        if not scored["latest_catalyst_is_fresh"]:
             warnings.append("Risk warning: Stock has no fresh catalyst.")
 
         if settings.require_above_vwap and not symbol.above_vwap:

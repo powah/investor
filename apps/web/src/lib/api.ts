@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
 export class ApiError extends Error {
   details: unknown;
@@ -16,10 +16,11 @@ type RequestOptions = RequestInit & {
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { emptyResponse, headers, ...requestOptions } = options;
+  const isFormData = typeof FormData !== "undefined" && requestOptions.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...requestOptions,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...headers,
     },
   });
@@ -42,7 +43,9 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 }
 
 export function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 10);
 }
 
 export function currency(value: number) {
