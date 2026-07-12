@@ -143,6 +143,10 @@ npm run build
 Backend:
 
 ```bash
+python3.14 -m venv .venv
+.venv/bin/python -m pip install -r apps/api/requirements.txt
 cd apps/api
 ../../.venv/bin/python -m pytest -q
 ```
+
+Python 3.14 is the supported backend development runtime; the API image is pinned to CPython 3.14.6. Recreate older virtual environments before installing the current dependency set.

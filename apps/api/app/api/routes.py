@@ -140,7 +140,7 @@ async def import_scanner_csv(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ScannerCsvValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"message": str(exc), "errors": exc.errors},
         ) from exc
     return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)

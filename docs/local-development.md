@@ -26,6 +26,13 @@ From the repository root, copy the environment template:
 cp .env.example .env
 ```
 
+The backend targets Python 3.14, matching the CPython 3.14.6 API image in `apps/api/Dockerfile`. For host-side tests, create the environment with Python 3.14 rather than reusing an older `.venv`:
+
+```bash
+python3.14 -m venv .venv
+.venv/bin/python -m pip install -r apps/api/requirements.txt
+```
+
 The `.env` file is ignored by Git. Never commit API keys or paste them into browser-side code.
 
 Create a free Alpaca paper account/key pair and set a contactable SEC identity:
