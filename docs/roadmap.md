@@ -128,10 +128,13 @@ Delivered:
 - No blind retries after timeouts or other ambiguous order writes.
 - A shared database execution gate that serializes kill-switch state and daily submission reservations immediately before dispatch.
 - Monotonic reconciliation of partial fills and protected child legs. A missing/rejected protective stop engages the kill switch and stays visible for operator action.
+- A sole worker-owned Alpaca paper Trading WebSocket connection for `trade_updates`, including binary JSON frame handling and explicit authentication/subscription acknowledgement.
+- Immutable order/fill event inbox records with deterministic provider IDs, database-enforced deduplication, and separate processing metadata.
+- Restart recovery for durably received but unapplied events, exponential reconnect, and a recent-order REST snapshot backfill before every connection attempt.
+- Operations/API visibility for stream state, reconnects, backfill time, event counters, processing failures, and recent durable events.
 
 Still planned within paper trading:
 
-- Durable Trading API WebSocket event ingestion and reconnect backfill
 - Automatic fill/partial-fill import into the journal
 - Longer-running paper observation, failure drills, and reconciliation testing
 - Richer order lifecycle and position analytics

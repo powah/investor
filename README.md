@@ -21,7 +21,8 @@ The repository contains a usable local workflow from discovery through guarded p
 - Persisted source provenance, timestamps, delay/consolidation labels, provider request IDs, and manual promotion of external events into scored catalysts.
 - A swappable broker contract with an Alpaca paper adapter for account, market clock, positions, orders, deterministic client-order lookup, protected limit-order submission, cancellation, and reconciliation.
 - A guarded execution-intent workflow with audit records. It starts disabled, with the kill switch engaged, automatic submission disabled, and manual approval mandatory.
-- A dedicated local worker that polls paper execution state every `AUTOMATION_POLL_SECONDS`. When the broker is safely configured for paper it reconciles active intents first, even while submission is disarmed.
+- A dedicated local worker that consumes Alpaca paper `trade_updates`, durably stores and deduplicates order/fill events, recovers unapplied events after restart, and runs REST backfill before every reconnect.
+- The same worker still polls paper execution state every `AUTOMATION_POLL_SECONDS` as an independent recovery path. It reconciles active intents even while submission is disarmed.
 
 The paper-execution slice accepts limit orders with bracket or OTO protection only. It does not blindly retry an order after a timeout or uncertain response; it reconciles using the deterministic client order ID. Live execution is hard-disabled in this release.
 
@@ -36,7 +37,7 @@ The two configured stock feeds serve different purposes and must not be treated 
 | Headlines | Alpaca News REST | Provider/account dependent | Symbol-linked news | Human catalyst review |
 | Filings | SEC EDGAR public APIs | Poll-based | SEC submissions | Human filing/catalyst review |
 
-Real-time IEX represents one exchange and is not an NBBO or full-market SIP view. Delayed SIP is consolidated but stale by design, so it is not used as the execution quote. This project does not claim paid real-time SIP, paid news, or streaming-feed support.
+Real-time IEX represents one exchange and is not an NBBO or full-market SIP view. Delayed SIP is consolidated but stale by design, so it is not used as the execution quote. This project does not claim paid real-time SIP, paid news, or continuous market/news streaming support. Its WebSocket use is limited to paper-account order events.
 
 ## Local-first stack
 
@@ -69,6 +70,7 @@ Create free **paper** credentials in the Alpaca dashboard; paper and live creden
 
 ```dotenv
 ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_TRADE_STREAM_URL=wss://paper-api.alpaca.markets/stream
 ALPACA_SCANNER_FEED=delayed_sip
 ALPACA_EXECUTION_FEED=iex
 ALLOW_LIVE_TRADING=false
@@ -103,6 +105,8 @@ The web app calls the API through a same-origin `/api` proxy. Docker resolves th
 - Kill state, final quote freshness, approval warnings, and the daily submission reservation are serialized through one database execution gate immediately before the broker request.
 - Every intent receives a stable client order ID. Existing provider state is looked up and reconciled before any uncertain order is considered for submission again.
 - A timeout after an order write is an unknown outcome, not permission to retry.
+- WebSocket order events are committed to an immutable inbox before execution state is applied. Provider event IDs and database uniqueness make replays idempotent.
+- A worker restart first reprocesses durable-but-unapplied events, then backfills recent paper orders through REST before opening or reopening the WebSocket.
 - Filled bracket/OTO parents remain under reconciliation until a protective stop is confirmed and an exit leg closes the position. Missing or rejected protection engages the global kill switch and remains visible as `protection_failed`.
 - The worker can auto-submit only an already manually approved intent, and only when automation is enabled, auto-submit is separately enabled, and the kill switch is released.
 - Only the exact Alpaca paper endpoint is accepted. Setting `ALLOW_LIVE_TRADING=true` blocks this release rather than enabling live orders.
@@ -123,10 +127,10 @@ See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
 ## Current limitations
 
 - Historical candle replay and immutable date-scoped scanner sessions are not implemented.
-- Market, news, and filing imports are manually triggered REST syncs. The background worker polls only paper-order reconciliation and guarded eligibility; it is not a market/news streaming consumer.
+- Market, news, and filing imports are manually triggered REST syncs. The background worker streams paper order events, but it is not a market/news streaming consumer.
 - Alpaca News availability and freshness can vary with the free account entitlement.
 - Paid real-time SIP is represented as unverified and disabled; configuration alone is never reported as entitlement.
-- Automatic fill-to-journal import and durable streaming order-event ingestion remain future work.
+- Automatic fill-to-journal import remains future work.
 - Live broker execution and paid data are not implemented.
 
 ## Verify changes

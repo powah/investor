@@ -122,6 +122,7 @@ def test_read_methods_authenticate_and_normalize_provider_payloads():
             assert request.url.params["status"] == "open"
             assert request.url.params["limit"] == "25"
             assert request.url.params["nested"] == "true"
+            assert request.url.params["direction"] == "desc"
             assert request.url.params["symbols"] == "AAPL,MSFT"
             return httpx.Response(
                 200,

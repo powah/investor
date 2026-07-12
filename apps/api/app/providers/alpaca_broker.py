@@ -103,6 +103,9 @@ class AlpacaBrokerProvider:
         limit: int = 50,
         nested: bool = True,
         symbols: Sequence[str] = (),
+        after: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        direction: str = "desc",
     ) -> BrokerOrderList:
         normalized_status = str(status).strip().lower()
         if normalized_status not in {"open", "closed", "all"}:
@@ -110,13 +113,21 @@ class AlpacaBrokerProvider:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500.")
         normalized_symbols = _normalize_symbols(symbols)
+        normalized_direction = str(direction).strip().lower()
+        if normalized_direction not in {"asc", "desc"}:
+            raise ValueError("direction must be 'asc' or 'desc'.")
         params: Dict[str, Any] = {
             "status": normalized_status,
             "limit": limit,
             "nested": str(bool(nested)).lower(),
+            "direction": normalized_direction,
         }
         if normalized_symbols:
             params["symbols"] = ",".join(normalized_symbols)
+        if after is not None:
+            params["after"] = _format_query_datetime(after, "after")
+        if until is not None:
+            params["until"] = _format_query_datetime(until, "until")
 
         response = await self._request("GET", "/v2/orders", params=params)
         payload = self._json_list(response, "orders")
@@ -427,6 +438,16 @@ def _normalize_order_or_raise(
         ) from exc
 
 
+def normalize_alpaca_order(
+    payload: Mapping[str, Any],
+    *,
+    request_id: Optional[str] = None,
+) -> BrokerOrder:
+    """Normalize an Alpaca order from REST or ``trade_updates``."""
+
+    return _normalize_order_or_raise(payload, request_id)
+
+
 def _normalize_order(
     payload: Mapping[str, Any],
     *,
@@ -529,6 +550,14 @@ def _optional_datetime(value: Any, name: str) -> Optional[datetime]:
         return parse_datetime(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} must be an ISO-8601 datetime.") from exc
+
+
+def _format_query_datetime(value: datetime, name: str) -> str:
+    if not isinstance(value, datetime):
+        raise ValueError(f"{name} must be a datetime.")
+    if value.tzinfo is None:
+        raise ValueError(f"{name} must include a timezone.")
+    return value.isoformat()
 
 
 def _parse_bool(value: Any, name: str) -> bool:

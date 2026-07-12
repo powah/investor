@@ -356,6 +356,22 @@ export type BrokerSync = {
   orders: BrokerOrder[];
 };
 
+export type BrokerStreamState = {
+  provider: string;
+  environment: string;
+  status: "starting" | "disabled" | "connecting" | "listening" | "reconnecting" | "error" | string;
+  last_connected_at: string | null;
+  last_disconnected_at: string | null;
+  last_event_at: string | null;
+  last_backfill_at: string | null;
+  last_error: string | null;
+  reconnect_count: number;
+  events_received: number;
+  events_processed: number;
+  duplicate_events: number;
+  updated_at: string;
+};
+
 export type AutomationRun = {
   processed: number;
   submitted: number;

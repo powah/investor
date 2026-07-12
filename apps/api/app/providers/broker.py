@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import Any, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 
 class BrokerProviderError(RuntimeError):
@@ -159,6 +159,22 @@ class BrokerOrderList:
 
 
 @dataclass(frozen=True)
+class BrokerTradeUpdate:
+    provider: str
+    provider_event_id: str
+    stream: str
+    event_type: str
+    order: BrokerOrder
+    occurred_at: datetime
+    received_at: datetime
+    execution_id: Optional[str] = None
+    price: Optional[Decimal] = None
+    quantity: Optional[Decimal] = None
+    position_quantity: Optional[Decimal] = None
+    raw_data: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class BrokerCancellation:
     order_id: str
     accepted: bool
@@ -286,6 +302,9 @@ class BrokerProvider(Protocol):
         limit: int = 50,
         nested: bool = True,
         symbols: Sequence[str] = (),
+        after: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        direction: str = "desc",
     ) -> BrokerOrderList:
         ...
 

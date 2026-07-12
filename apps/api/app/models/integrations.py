@@ -131,6 +131,63 @@ class BrokerOrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class BrokerTradeUpdate(Base):
+    """Immutable broker event inbox with mutable processing metadata.
+
+    Source fields are written exactly once. ``processed_at`` and
+    ``processing_error`` let a restarted worker resume the small window after
+    durable receipt but before execution-state application.
+    """
+
+    __tablename__ = "broker_trade_updates"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_broker_trade_update_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    provider_event_id: Mapped[str] = mapped_column(String(200))
+    stream: Mapped[str] = mapped_column(String(60), default="trade_updates")
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    broker_order_id: Mapped[str] = mapped_column(String(128), index=True)
+    client_order_id: Mapped[str] = mapped_column(String(128), index=True)
+    execution_intent_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("execution_intents.id"), nullable=True, index=True
+    )
+    execution_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, index=True)
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    position_quantity: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    normalized_order: Mapped[dict] = mapped_column(JSON, default=dict)
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class BrokerStreamState(Base):
+    __tablename__ = "broker_stream_states"
+
+    provider: Mapped[str] = mapped_column(String(40), primary_key=True)
+    environment: Mapped[str] = mapped_column(String(30), default="paper")
+    status: Mapped[str] = mapped_column(String(40), default="disabled", index=True)
+    last_connected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_disconnected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_event_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_backfill_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reconnect_count: Mapped[int] = mapped_column(Integer, default=0)
+    events_received: Mapped[int] = mapped_column(Integer, default=0)
+    events_processed: Mapped[int] = mapped_column(Integer, default=0)
+    duplicate_events: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AutomationAuditLog(Base):
     __tablename__ = "automation_audit_logs"
 

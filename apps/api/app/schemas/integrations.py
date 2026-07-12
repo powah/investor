@@ -243,6 +243,45 @@ class BrokerSyncRead(BaseModel):
     orders: list[BrokerOrderRead]
 
 
+class BrokerStreamStateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    environment: str
+    status: str
+    last_connected_at: Optional[datetime]
+    last_disconnected_at: Optional[datetime]
+    last_event_at: Optional[datetime]
+    last_backfill_at: Optional[datetime]
+    last_error: Optional[str]
+    reconnect_count: int
+    events_received: int
+    events_processed: int
+    duplicate_events: int
+    updated_at: datetime
+
+
+class BrokerTradeUpdateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    provider: str
+    provider_event_id: str
+    stream: str
+    event_type: str
+    broker_order_id: str
+    client_order_id: str
+    execution_intent_id: Optional[int]
+    execution_id: Optional[str]
+    price: Optional[float]
+    quantity: Optional[float]
+    position_quantity: Optional[float]
+    occurred_at: datetime
+    received_at: datetime
+    processed_at: Optional[datetime]
+    processing_error: Optional[str]
+
+
 class AutomationRunRead(BaseModel):
     processed: int
     submitted: int

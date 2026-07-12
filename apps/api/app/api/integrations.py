@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
-from app.models.integrations import AutomationAuditLog, ExecutionIntent, ExternalNewsEvent
+from app.models.integrations import (
+    AutomationAuditLog,
+    BrokerStreamState,
+    BrokerTradeUpdate,
+    ExecutionIntent,
+    ExternalNewsEvent,
+)
 from app.models.trading import Catalyst, ScannerSymbol
 from app.providers.broker import BrokerProviderError
 from app.schemas.integrations import (
@@ -22,6 +28,8 @@ from app.schemas.integrations import (
     BrokerOrderRead,
     BrokerPositionRead,
     BrokerSyncRead,
+    BrokerStreamStateRead,
+    BrokerTradeUpdateRead,
     ExecutionActionRead,
     ExecutionApprovalRequest,
     ExecutionIntentCreate,
@@ -61,6 +69,24 @@ from app.services.brokers import BrokerNotConfigured, UnsafeBrokerConfiguration,
 
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
+
+
+def _default_stream_state() -> BrokerStreamStateRead:
+    return BrokerStreamStateRead(
+        provider="alpaca",
+        environment="paper",
+        status="starting",
+        last_connected_at=None,
+        last_disconnected_at=None,
+        last_event_at=None,
+        last_backfill_at=None,
+        last_error=None,
+        reconnect_count=0,
+        events_received=0,
+        events_processed=0,
+        duplicate_events=0,
+        updated_at=datetime.now(timezone.utc),
+    )
 
 
 def _alpaca_market_status(settings: Settings) -> ProviderConnectionRead:
@@ -338,6 +364,25 @@ async def get_broker_sync(settings: Settings = Depends(get_settings)) -> BrokerS
             )
             for order in synced.orders
         ],
+    )
+
+
+@router.get("/broker/stream", response_model=BrokerStreamStateRead)
+def get_broker_stream_state(db: Session = Depends(get_db)) -> BrokerStreamStateRead:
+    state = db.get(BrokerStreamState, "alpaca")
+    return BrokerStreamStateRead.model_validate(state) if state is not None else _default_stream_state()
+
+
+@router.get("/broker/events", response_model=list[BrokerTradeUpdateRead])
+def list_broker_trade_updates(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(BrokerTradeUpdate)
+        .order_by(BrokerTradeUpdate.received_at.desc(), BrokerTradeUpdate.id.desc())
+        .limit(limit)
+        .all()
     )
 
 

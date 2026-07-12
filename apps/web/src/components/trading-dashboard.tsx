@@ -44,6 +44,7 @@ import type {
   Analytics,
   AutomationRun,
   AutomationSettings,
+  BrokerStreamState,
   BrokerSync,
   Catalyst,
   ExecutionAction,
@@ -1085,6 +1086,7 @@ function OperationsWorkspace({
   const [executions, setExecutions] = useState<ExecutionIntent[]>([]);
   const [executionReviews, setExecutionReviews] = useState<Record<number, ExecutionReview>>({});
   const [brokerSync, setBrokerSync] = useState<BrokerSync | null>(null);
+  const [brokerStream, setBrokerStream] = useState<BrokerStreamState | null>(null);
   const [promotionDrafts, setPromotionDrafts] = useState<Record<number, PromotionDraft>>({});
   const [killConfirmation, setKillConfirmation] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1110,13 +1112,14 @@ function OperationsWorkspace({
 
   async function loadOperations() {
     setLoading(true);
-    const [statusResult, snapshotResult, newsResult, automationResult, executionResult] =
+    const [statusResult, snapshotResult, newsResult, automationResult, executionResult, streamResult] =
       await Promise.allSettled([
         apiFetch<IntegrationsStatus>("/integrations/status"),
         apiFetch<MarketDataSnapshot[]>("/integrations/market-data/snapshots"),
         apiFetch<ExternalNewsEvent[]>("/integrations/news-events"),
         apiFetch<AutomationSettings>("/integrations/automation/settings"),
         apiFetch<Array<ExecutionIntent | ExecutionAction>>("/integrations/executions"),
+        apiFetch<BrokerStreamState>("/integrations/broker/stream"),
       ]);
 
     const failures: string[] = [];
@@ -1170,6 +1173,11 @@ function OperationsWorkspace({
       setExecutionReviews((current) => ({ ...current, ...reviews }));
     } else {
       failures.push(`paper order queue: ${apiMessage(executionResult.reason)}`);
+    }
+    if (streamResult.status === "fulfilled") {
+      setBrokerStream(streamResult.value);
+    } else {
+      failures.push(`order event stream: ${apiMessage(streamResult.reason)}`);
     }
 
     setError(failures.length ? `Some operations data is unavailable — ${failures.join("; ")}` : null);
@@ -1457,11 +1465,12 @@ function OperationsWorkspace({
             {loading ? "Checking" : "Refresh status"}
           </button>
         </div>
-        <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-5">
           <ConnectionCard title="Market data" connection={integrationStatus?.market_data ?? null} icon={Radio} />
           <ConnectionCard title="News" connection={integrationStatus?.news ?? null} icon={Newspaper} />
           <ConnectionCard title="SEC filings" connection={integrationStatus?.filings ?? null} icon={CloudDownload} />
           <ConnectionCard title="Paper broker" connection={integrationStatus?.broker ?? null} icon={WalletCards} />
+          <BrokerStreamCard stream={brokerStream} />
         </div>
       </section>
 
@@ -1665,6 +1674,35 @@ function ConnectionCard({
       </div>
       <p className="mt-2 text-xs leading-5 text-slate-500">
         {connection?.message ?? "This check runs only while Operations is open."}
+      </p>
+    </article>
+  );
+}
+
+function BrokerStreamCard({ stream }: { stream: BrokerStreamState | null }) {
+  const listening = stream?.status === "listening";
+  const label = stream ? stream.status.replaceAll("_", " ") : "checking";
+  const lastActivity = stream?.last_event_at ?? stream?.last_backfill_at ?? stream?.last_connected_at;
+  return (
+    <article className="rounded-xl border border-line bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className={`rounded-lg p-2 ${listening ? "bg-teal-50 text-teal-700" : "bg-slate-100 text-slate-500"}`}>
+          <Activity className="h-4 w-4" aria-hidden="true" />
+        </div>
+        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${listening ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-800"}`}>
+          {label}
+        </span>
+      </div>
+      <h4 className="mt-3 font-semibold text-ink">Order events</h4>
+      <div className="mt-1 text-xs font-semibold text-slate-600">
+        {stream ? `${stream.events_processed} applied · ${stream.duplicate_events} replays ignored` : "Waiting for worker status"}
+      </div>
+      <p className="mt-2 text-xs leading-5 text-slate-500">
+        {stream?.last_error
+          ? stream.last_error
+          : lastActivity
+            ? `Last activity ${new Date(lastActivity).toLocaleString()}. REST recovery runs before every reconnect.`
+            : "The worker durably records Alpaca paper order and fill updates before applying them."}
       </p>
     </article>
   );

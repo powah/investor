@@ -734,6 +734,33 @@ def _engage_kill_for_protection_failure(
     )
 
 
+async def expand_protected_order(broker: BrokerProvider, order: BrokerOrder) -> BrokerOrder:
+    """Public stream/reconciliation hook for fail-closed protected-order checks."""
+
+    return await _expand_protected_order(broker, order)
+
+
+def apply_broker_order_state(db: Session, intent: ExecutionIntent, order: BrokerOrder) -> None:
+    """Apply a normalized broker snapshot monotonically to an execution intent."""
+
+    _record_broker_order(db, intent, order)
+
+
+def engage_kill_for_protection_failure(
+    db: Session,
+    intent: ExecutionIntent,
+    automation: AutomationSettings,
+    *,
+    broker_order_id: str,
+) -> None:
+    _engage_kill_for_protection_failure(
+        db,
+        intent,
+        automation,
+        broker_order_id=broker_order_id,
+    )
+
+
 def _quote_snapshot_blockers(
     intent: ExecutionIntent,
     automation: AutomationSettings,
