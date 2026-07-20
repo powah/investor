@@ -123,6 +123,7 @@ See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
 - [Local development](docs/local-development.md)
 - [Cost plan](docs/cost-plan.md)
 - [Roadmap](docs/roadmap.md)
+- [Scanner completion plan](docs/scanner-completion-plan.md)
 
 ## Current limitations
 

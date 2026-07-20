@@ -2,6 +2,8 @@
 
 Status labels describe the repository's current local implementation. “Implemented” does not mean production-ready or suitable for live capital.
 
+The detailed path from the current persistent/demo scanner to automatic daily discovery, date-scoped sessions, complete scoring evidence, scheduling, and replay is documented in the [Scanner Completion Plan](scanner-completion-plan.md).
+
 ## Phase 1: Local foundation
 
 **Status: Implemented**
