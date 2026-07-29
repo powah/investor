@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     container_name: trading_postgres
     environment:
       POSTGRES_USER: trading
@@ -9,7 +9,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data_v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U trading -d trading_tool"]
       interval: 5s
@@ -132,4 +132,4 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres_data:
+  postgres_data_v18:
