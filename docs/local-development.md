@@ -10,7 +10,6 @@ Run the decision-support, free external-data, and guarded Alpaca paper workflow 
 Frontend: localhost:3000
 Backend API: localhost:8000
 PostgreSQL: localhost:5432
-Redis: localhost:6379
 Paper worker: background Docker service (no exposed port)
 ```
 
@@ -30,7 +29,26 @@ The backend targets Python 3.14, matching the CPython 3.14.6 API image in `apps/
 
 ```bash
 python3.14 -m venv .venv
-.venv/bin/python -m pip install -r apps/api/requirements.txt
+.venv/bin/python -m pip install -r apps/api/requirements-dev.txt
+```
+
+`requirements.in` contains runtime dependencies and
+`requirements-dev.in` adds test tooling. Their corresponding `.txt` files are
+hash-pinned locks. After changing either input, regenerate both locks from
+`apps/api` with:
+
+```bash
+../../.venv/bin/pip-compile --generate-hashes --output-file=requirements.txt requirements.in
+../../.venv/bin/pip-compile --generate-hashes --allow-unsafe --output-file=requirements-dev.txt requirements-dev.in
+```
+
+The development lock keeps pip 26.1.2 because pip-tools 7.6.0 cannot yet run
+against pip 26.2. The API image still uses pip 26.2.
+
+Audit the resolved runtime graph with:
+
+```bash
+.venv/bin/python -m pip_audit -r apps/api/requirements.txt
 ```
 
 The `.env` file is ignored by Git. Never commit API keys or paste them into browser-side code.

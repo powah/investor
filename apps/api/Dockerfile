@@ -1,4 +1,4 @@
-FROM python:3.14.6-slim
+FROM python:3.14.6-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY apps/api/requirements.txt ./requirements.txt
-RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY apps/api/app ./app

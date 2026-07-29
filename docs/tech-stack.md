@@ -9,8 +9,7 @@ Charts: TradingView Lightweight Charts
 Backend: Python FastAPI
 Validation: Pydantic
 Database: PostgreSQL
-Cache / queue: Redis
-Background jobs: RQ or Celery
+Background jobs: dedicated Python worker
 Local runtime: Docker Compose
 ```
 
@@ -44,19 +43,11 @@ Reliable database for:
 - Journal notes
 - Risk settings
 
-### Redis
-
-Useful later for:
-
-- Scanner cache
-- Background jobs
-- WebSocket events
-- Temporary market snapshots
-
 ## Future additions
 
 Only add these after the MVP works:
 
+- A cache or queue only when a measured use case requires one
 - TimescaleDB for large candle/time-series storage
 - Paid real-time market data provider
 - Paid news provider

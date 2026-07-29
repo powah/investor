@@ -16,12 +16,6 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7
-    container_name: trading_redis
-    ports:
-      - "127.0.0.1:6379:6379"
-
   migrate:
     build:
       context: .
@@ -67,8 +61,6 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_started
     healthcheck:
       test:
         [

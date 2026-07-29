@@ -46,7 +46,6 @@ Real-time IEX represents one exchange and is not an NBBO or full-market SIP view
 Frontend: Next.js + TypeScript + TailwindCSS
 Backend: Python FastAPI
 Database: PostgreSQL
-Cache: Redis
 Charts: TradingView Lightweight Charts
 Runtime: Docker Compose
 ```
@@ -94,7 +93,7 @@ Local URLs:
 - Backend API: http://localhost:8000
 - API health check: http://localhost:8000/health
 
-Docker publishes the web app, API, PostgreSQL, and Redis on `127.0.0.1` only. This local release does not implement user authentication or CSRF protection, so do not expose these ports through a LAN bind, reverse proxy, tunnel, or public host. A remotely reachable deployment requires an authenticated operator boundary, CSRF protection, TLS, and secrets management first.
+Docker publishes the web app, API, and PostgreSQL on `127.0.0.1` only. This local release does not implement user authentication or CSRF protection, so do not expose these ports through a LAN bind, reverse proxy, tunnel, or public host. A remotely reachable deployment requires an authenticated operator boundary, CSRF protection, TLS, and secrets management first.
 
 Open the **Operations** tab and run **Test Alpaca access** to verify and record the configured
 market feeds, screeners, news endpoint, and paper account before provider features are reported
@@ -159,7 +158,7 @@ Backend:
 
 ```bash
 python3.14 -m venv .venv
-.venv/bin/python -m pip install -r apps/api/requirements.txt
+.venv/bin/python -m pip install -r apps/api/requirements-dev.txt
 cd apps/api
 ../../.venv/bin/alembic -c alembic.ini upgrade head
 ../../.venv/bin/python -m pytest -q
