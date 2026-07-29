@@ -15,7 +15,26 @@ class ProviderConnectionRead(BaseModel):
     source_feed: Optional[str] = None
     real_time: bool = False
     is_consolidated: bool = False
+    verification_status: Literal["not_tested", "available", "unavailable", "failed"] = "not_tested"
+    verified_at: Optional[datetime] = None
+    verification_message: Optional[str] = None
     message: str
+
+
+class ProviderCapabilityCheckRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    provider: str
+    capability: str
+    endpoint: str
+    source_feed: Optional[str]
+    status: Literal["available", "unavailable", "failed"]
+    http_status: Optional[int]
+    request_id: Optional[str]
+    message: str
+    details: dict
+    tested_at: datetime
 
 
 class IntegrationsStatusRead(BaseModel):

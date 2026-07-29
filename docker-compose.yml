@@ -22,6 +22,19 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
 
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    env_file:
+      - .env.example
+    environment:
+      APP_MODE: ${APP_MODE:-operational}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -30,6 +43,7 @@ services:
     env_file:
       - .env.example
     environment:
+      APP_MODE: ${APP_MODE:-operational}
       ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
       ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
       ALPACA_TRADING_BASE_URL: ${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}
@@ -51,6 +65,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
     healthcheck:
@@ -74,6 +90,7 @@ services:
     env_file:
       - .env.example
     environment:
+      APP_MODE: ${APP_MODE:-operational}
       ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
       ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
       ALPACA_TRADING_BASE_URL: ${ALPACA_TRADING_BASE_URL:-https://paper-api.alpaca.markets}

@@ -19,6 +19,7 @@ The repository contains a usable local workflow from discovery through guarded p
 - Trade plans, journal entries, process tags, plan-adherence tracking, and basic analytics.
 - Free external-data adapters for Alpaca Basic market snapshots and news plus public SEC EDGAR submissions.
 - Persisted source provenance, timestamps, delay/consolidation labels, provider request IDs, and manual promotion of external events into scored catalysts.
+- Alembic-managed database migrations, operational/demo data isolation, and persisted read-only Alpaca capability checks.
 - A swappable broker contract with an Alpaca paper adapter for account, market clock, positions, orders, deterministic client-order lookup, protected limit-order submission, cancellation, and reconciliation.
 - A guarded execution-intent workflow with audit records. It starts disabled, with the kill switch engaged, automatic submission disabled, and manual approval mandatory.
 - A dedicated local worker that consumes Alpaca paper `trade_updates`, durably stores and deduplicates order/fill events, recovers unapplied events after restart, and runs REST backfill before every reconnect.
@@ -61,6 +62,7 @@ cp .env.example .env
 Edit `.env` and add:
 
 ```dotenv
+APP_MODE=operational
 ALPACA_API_KEY_ID=your-paper-key-id
 ALPACA_API_SECRET_KEY=your-paper-secret-key
 SEC_USER_AGENT=Your Name your-contact-email@example.com
@@ -82,6 +84,10 @@ Start or rebuild the stack after changing `.env`:
 docker compose up --build
 ```
 
+Compose runs database migrations before starting the API. Operational mode never auto-loads
+sample scanner candidates. Set `APP_MODE=demo` only when you deliberately want the sample-data
+workspace; automatically seeded demo rows stay hidden after returning to operational mode.
+
 Local URLs:
 
 - Frontend: http://localhost:3000
@@ -90,7 +96,11 @@ Local URLs:
 
 Docker publishes the web app, API, PostgreSQL, and Redis on `127.0.0.1` only. This local release does not implement user authentication or CSRF protection, so do not expose these ports through a LAN bind, reverse proxy, tunnel, or public host. A remotely reachable deployment requires an authenticated operator boundary, CSRF protection, TLS, and secrets management first.
 
-Open the **Operations** tab to inspect provider status, sync market/news/filing data, review the paper account and orders, and manage guarded paper intents. External news and SEC records remain unscored until you review and promote them as catalysts.
+Open the **Operations** tab and run **Test Alpaca access** to verify and record the configured
+market feeds, screeners, news endpoint, and paper account before provider features are reported
+as ready. Then sync market/news/filing data, review the paper account and orders, and manage
+guarded paper intents. External news and SEC records remain unscored until you review and promote
+them as catalysts.
 
 The web app calls the API through a same-origin `/api` proxy. Docker resolves that proxy to the API service, while local Next.js development defaults to `http://localhost:8000`.
 
@@ -151,6 +161,7 @@ Backend:
 python3.14 -m venv .venv
 .venv/bin/python -m pip install -r apps/api/requirements.txt
 cd apps/api
+../../.venv/bin/alembic -c alembic.ini upgrade head
 ../../.venv/bin/python -m pytest -q
 ```
 

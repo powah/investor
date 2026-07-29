@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.config import Settings, get_settings
 from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol, TradePlan, WatchlistItem
 from app.schemas.trading import (
     AnalyticsRead,
@@ -108,8 +109,14 @@ def health() -> dict:
 
 
 @router.get("/scanner", response_model=list[ScannerSymbolRead])
-def list_scanner(db: Session = Depends(get_db)) -> list[ScannerSymbolRead]:
-    symbols = db.query(ScannerSymbol).all()
+def list_scanner(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[ScannerSymbolRead]:
+    query = db.query(ScannerSymbol)
+    if settings.app_mode != "demo":
+        query = query.filter(ScannerSymbol.data_origin != "demo")
+    symbols = query.all()
     return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)
 
 
@@ -118,8 +125,10 @@ def upsert_scanner_symbol(payload: ScannerSymbolCreate, db: Session = Depends(ge
     ticker = _ticker(payload.ticker)
     symbol = db.query(ScannerSymbol).filter(ScannerSymbol.ticker == ticker).one_or_none()
     if symbol is None:
-        symbol = ScannerSymbol(ticker=ticker)
+        symbol = ScannerSymbol(ticker=ticker, data_origin="manual")
         db.add(symbol)
+    else:
+        symbol.data_origin = "manual"
 
     for field, value in payload.model_dump(exclude={"ticker"}).items():
         setattr(symbol, field, value)
@@ -140,7 +149,7 @@ async def import_scanner_csv(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ScannerCsvValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=422,
             detail={"message": str(exc), "errors": exc.errors},
         ) from exc
     return sorted([_scanner_read(symbol, db) for symbol in symbols], key=lambda item: item.score, reverse=True)

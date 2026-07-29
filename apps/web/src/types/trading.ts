@@ -14,6 +14,7 @@ export type ScannerSymbol = {
   holding_key_level: boolean;
   no_dilution_red_flag: boolean;
   status: "candidate" | "watch" | "ignore";
+  data_origin: string;
   score: number;
   label: string;
   reasons: string[];
@@ -124,6 +125,9 @@ export type ProviderConnectionStatus = {
   source_feed: string | null;
   real_time: boolean;
   is_consolidated: boolean;
+  verification_status: "not_tested" | "available" | "unavailable" | "failed";
+  verified_at: string | null;
+  verification_message: string | null;
   message: string;
 };
 

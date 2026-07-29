@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.integrations import integration_status, router
 from app.core.config import Settings, get_settings
 from app.core.database import Base, get_db
-from app.models.integrations import ExternalNewsEvent, MarketDataSnapshot
+from app.models.integrations import ExternalNewsEvent, MarketDataSnapshot, ProviderCapabilityCheck
 from app.models.trading import Catalyst, ScannerSymbol, TradePlan
 
 
@@ -42,12 +42,36 @@ def test_integration_status_explains_unconfigured_free_sources():
 
 
 def test_iex_is_labeled_realtime_but_not_consolidated():
+    checked_at = datetime.now(timezone.utc)
     result = integration_status(
         _settings(
             alpaca_api_key_id="paper-key",
             alpaca_api_secret_key="paper-secret",
             alpaca_scanner_feed="iex",
-        )
+        ),
+        [
+            ProviderCapabilityCheck(
+                provider="alpaca",
+                capability="market_data:iex",
+                endpoint="/v2/stocks/snapshots",
+                source_feed="iex",
+                status="available",
+                http_status=200,
+                message="Read access verified.",
+                details={},
+                tested_at=checked_at,
+            ),
+            ProviderCapabilityCheck(
+                provider="alpaca",
+                capability="paper_account",
+                endpoint="/v2/account",
+                status="available",
+                http_status=200,
+                message="Read access verified.",
+                details={},
+                tested_at=checked_at,
+            ),
+        ],
     )
 
     assert result.market_data.enabled is True
@@ -55,6 +79,31 @@ def test_iex_is_labeled_realtime_but_not_consolidated():
     assert result.market_data.is_consolidated is False
     assert "not a consolidated" in result.market_data.message
     assert result.broker.enabled is True
+    assert result.market_data.verification_status == "available"
+
+
+def test_integration_status_uses_the_latest_recorded_capability_result():
+    checked_at = datetime.now(timezone.utc)
+    result = integration_status(
+        _settings(alpaca_api_key_id="paper-key", alpaca_api_secret_key="paper-secret"),
+        [
+            ProviderCapabilityCheck(
+                provider="alpaca",
+                capability="market_data:delayed_sip",
+                endpoint="/v2/stocks/snapshots",
+                source_feed="delayed_sip",
+                status="available",
+                http_status=200,
+                message="Read access verified.",
+                details={},
+                tested_at=checked_at,
+            )
+        ],
+    )
+
+    assert result.market_data.verification_status == "available"
+    assert result.market_data.verified_at == checked_at
+    assert result.market_data.verification_message == "Read access verified."
 
 
 def test_sip_is_unverified_and_disabled_in_the_free_release():

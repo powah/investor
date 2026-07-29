@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import router
+from app.core.config import Settings, get_settings
 from app.core.database import Base, get_db
+from app.models.trading import ScannerSymbol
+from app.services.seed import initialize_application_data
 
 
 HEADERS = (
@@ -65,6 +68,45 @@ def test_import_csv_normalizes_and_returns_ranked_symbols(client: TestClient):
     assert symbols[0]["clean_daily_chart_room"] is False
     assert symbols[0]["holding_key_level"] is False
     assert symbols[0]["no_dilution_red_flag"] is False
+    assert symbols[0]["data_origin"] == "manual_import"
+
+
+def test_operational_initialization_does_not_seed_demo_symbols():
+    engine = create_engine("sqlite+pysqlite:///:memory:", poolclass=StaticPool)
+    testing_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+
+    with testing_session() as db:
+        initialize_application_data(db, app_mode="operational")
+        assert db.query(ScannerSymbol).count() == 0
+
+
+def test_operational_scanner_hides_rows_created_by_demo_mode():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    testing_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    with testing_session() as db:
+        initialize_application_data(db, app_mode="demo")
+        assert db.query(ScannerSymbol).filter_by(data_origin="demo").count() > 0
+
+    def override_get_db():
+        with testing_session() as db:
+            yield db
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        app_mode="operational",
+        database_url="sqlite+pysqlite:///:memory:",
+    )
+    with TestClient(app) as test_client:
+        assert test_client.get("/scanner").json() == []
 
 
 def test_scanner_score_uses_latest_published_catalyst(client: TestClient):

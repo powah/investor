@@ -15,6 +15,7 @@ from app.models.integrations import (
     BrokerTradeUpdate,
     ExecutionIntent,
     ExternalNewsEvent,
+    ProviderCapabilityCheck,
 )
 from app.models.trading import Catalyst, ScannerSymbol
 from app.providers.broker import BrokerProviderError
@@ -40,6 +41,7 @@ from app.schemas.integrations import (
     MarketDataSnapshotRead,
     NewsSyncRequest,
     PromoteNewsEventRequest,
+    ProviderCapabilityCheckRead,
     ProviderConnectionRead,
     SymbolSyncRequest,
     SyncProviderResultRead,
@@ -66,6 +68,7 @@ from app.services.feeds import (
     sync_sec_filings,
 )
 from app.services.brokers import BrokerNotConfigured, UnsafeBrokerConfiguration, sync_broker
+from app.services.capabilities import latest_capability_checks, probe_alpaca_capabilities
 
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -89,7 +92,36 @@ def _default_stream_state() -> BrokerStreamStateRead:
     )
 
 
-def _alpaca_market_status(settings: Settings) -> ProviderConnectionRead:
+def _verification_fields(
+    checks: dict[str, ProviderCapabilityCheck],
+    capability: str,
+) -> dict[str, object]:
+    check = checks.get(capability)
+    if check is None:
+        return {
+            "verification_status": "not_tested",
+            "verified_at": None,
+            "verification_message": "Run the read-only capability probe to verify account access.",
+        }
+    return {
+        "verification_status": check.status,
+        "verified_at": check.tested_at,
+        "verification_message": check.message,
+    }
+
+
+def _capability_available(
+    checks: dict[str, ProviderCapabilityCheck],
+    capability: str,
+) -> bool:
+    check = checks.get(capability)
+    return check is not None and check.status == "available"
+
+
+def _alpaca_market_status(
+    settings: Settings,
+    checks: dict[str, ProviderCapabilityCheck],
+) -> ProviderConnectionRead:
     feed = settings.alpaca_scanner_feed
     entitlement_unverified = feed == "sip"
     is_realtime = feed == "iex"
@@ -106,17 +138,29 @@ def _alpaca_market_status(settings: Settings) -> ProviderConnectionRead:
         provider="alpaca",
         purpose="market_data",
         configured=settings.alpaca_configured,
-        enabled=settings.alpaca_configured and not entitlement_unverified,
+        enabled=(
+            settings.alpaca_configured
+            and not entitlement_unverified
+            and _capability_available(checks, f"market_data:{feed}")
+        ),
         environment="free" if feed != "sip" else "entitlement_unverified",
         source_feed=feed,
         real_time=is_realtime,
         is_consolidated=is_consolidated,
+        **_verification_fields(checks, f"market_data:{feed}"),
         message=message,
     )
 
 
-@router.get("/status", response_model=IntegrationsStatusRead)
-def integration_status(settings: Settings = Depends(get_settings)) -> IntegrationsStatusRead:
+def integration_status(
+    settings: Settings,
+    capability_checks: list[ProviderCapabilityCheck] | None = None,
+) -> IntegrationsStatusRead:
+    checks = {
+        check.capability: check
+        for check in (capability_checks or [])
+        if check.provider == "alpaca"
+    }
     alpaca_configured = settings.alpaca_configured
     paper_safe = (
         settings.alpaca_paper_mode
@@ -124,16 +168,17 @@ def integration_status(settings: Settings = Depends(get_settings)) -> Integratio
         and settings.alpaca_execution_feed == "iex"
     )
     return IntegrationsStatusRead(
-        market_data=_alpaca_market_status(settings),
+        market_data=_alpaca_market_status(settings, checks),
         news=ProviderConnectionRead(
             provider="alpaca",
             purpose="news",
             configured=alpaca_configured,
-            enabled=alpaca_configured,
+            enabled=alpaca_configured and _capability_available(checks, "news"),
             environment="free_rest",
             source_feed="alpaca_news",
             real_time=False,
             is_consolidated=False,
+            **_verification_fields(checks, "news"),
             message=(
                 "Alpaca News REST is ready; availability and freshness depend on account entitlement."
                 if alpaca_configured
@@ -149,6 +194,7 @@ def integration_status(settings: Settings = Depends(get_settings)) -> Integratio
             source_feed="sec_submissions",
             real_time=False,
             is_consolidated=False,
+            verification_message="SEC access is verified by filing synchronization, not the Alpaca probe.",
             message=(
                 "SEC EDGAR filing sync is ready. Imported filings require human catalyst review."
                 if settings.sec_configured
@@ -159,7 +205,11 @@ def integration_status(settings: Settings = Depends(get_settings)) -> Integratio
             provider="alpaca",
             purpose="paper_broker",
             configured=alpaca_configured,
-            enabled=alpaca_configured and paper_safe,
+            enabled=(
+                alpaca_configured
+                and paper_safe
+                and _capability_available(checks, "paper_account")
+            ),
             environment=(
                 "paper"
                 if paper_safe
@@ -170,6 +220,7 @@ def integration_status(settings: Settings = Depends(get_settings)) -> Integratio
             source_feed=settings.alpaca_execution_feed,
             real_time=settings.alpaca_execution_feed == "iex",
             is_consolidated=settings.alpaca_execution_feed == "sip",
+            **_verification_fields(checks, "paper_account"),
             message=(
                 "Paper broker is configured. Automation remains disarmed until explicitly enabled."
                 if alpaca_configured and paper_safe
@@ -179,6 +230,25 @@ def integration_status(settings: Settings = Depends(get_settings)) -> Integratio
             ),
         ),
     )
+
+
+@router.get("/status", response_model=IntegrationsStatusRead)
+def get_integration_status(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> IntegrationsStatusRead:
+    return integration_status(settings, latest_capability_checks(db))
+
+
+@router.post("/capabilities/probe", response_model=list[ProviderCapabilityCheckRead])
+async def probe_capabilities(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[ProviderCapabilityCheck]:
+    try:
+        return await probe_alpaca_capabilities(db, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/automation/settings", response_model=AutomationSettingsRead)

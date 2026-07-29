@@ -27,6 +27,7 @@ class ScannerSymbol(Base):
     holding_key_level: Mapped[bool] = mapped_column(Boolean, default=False)
     no_dilution_red_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="candidate")
+    data_origin: Mapped[str] = mapped_column(String(30), default="manual", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

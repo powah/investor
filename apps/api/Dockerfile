@@ -10,6 +10,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY apps/api/app ./app
+COPY apps/api/alembic.ini ./alembic.ini
+COPY apps/api/alembic ./alembic
 COPY data ./data
 
 EXPOSE 8000

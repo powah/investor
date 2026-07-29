@@ -8,6 +8,7 @@ from app.models.integrations import (
     ExternalNewsEvent,
     IntegrationSyncRun,
     MarketDataSnapshot,
+    ProviderCapabilityCheck,
 )
 from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol, TradePlan, WatchlistItem
 
@@ -23,6 +24,7 @@ __all__ = [
     "IntegrationSyncRun",
     "JournalEntry",
     "MarketDataSnapshot",
+    "ProviderCapabilityCheck",
     "RiskSettings",
     "ScannerSymbol",
     "TradePlan",

@@ -22,11 +22,11 @@ The first target should be a complete **delayed research scanner**. A consolidat
 - `scanner_symbols` contains one unique row per ticker rather than one observation per market session, so old symbols persist across days.
 - Market-data synchronization refreshes existing scanner/watchlist symbols but does not discover new candidates.
 - Relative volume, float, market cap, chart room, key-level status, and dilution clearance are currently imported or manually assigned rather than fully calculated.
-- Demo data is seeded on application startup and is not clearly separated from operational scanner data.
+- Operational mode no longer auto-seeds demo data; explicitly selected demo mode tags its sample rows so operational scanner queries can exclude them.
 - Market, news, and SEC synchronization is manually triggered; there is no scanner scheduler.
-- There is no immutable scanner-session or replay model and no database migration framework.
-- The Alpaca, SEC, and paper-broker integrations require local configuration before the current integration slice can be exercised.
-- The frontend typecheck and lint pass. The existing host virtual environment is Python 3.9 even though the project runtime is Python 3.14, so backend verification must be normalized before relying on test results.
+- There is no immutable scanner-session or replay model. Database changes are now managed by Alembic.
+- The Alpaca, SEC, and paper-broker integrations require local configuration before the current integration slice can be exercised. A read-only Alpaca capability probe records actual endpoint and feed access once paper credentials are present.
+- Frontend verification and the backend suite pass; the host backend environment now uses Python 3.14.6.
 - Guarded paper-execution infrastructure is further developed than daily scanner discovery. Scanner work should take priority over additional execution features.
 
 ## Data-source constraints
@@ -38,6 +38,12 @@ The first target should be a complete **delayed research scanner**. A consolidat
 - Values from different feeds must not be mixed without labeling. In particular, IEX-only real-time volume is not directly comparable to consolidated SIP volume.
 
 ## Phase 0: Stabilize the foundation
+
+**Status: Implemented.** Python 3.14.6 is installed for host verification, the backend suite
+runs in a recreated Python 3.14 virtual environment, Alembic owns schema changes, operational
+mode does not auto-seed sample candidates, and Operations can persist read-only Alpaca
+endpoint/feed capability checks. Actual account results still require the operator's local paper
+credentials and an explicit probe.
 
 ### Work
 
@@ -193,15 +199,12 @@ Apply the following fundamental-data policy:
 
 ## Immediate implementation sprint
 
-The next sprint should be limited to:
+Phase 0 items 1, 2, 4, and 5 are complete. The next sprint should be limited to the remaining
+scanner-session backbone:
 
-1. Normalize the Python 3.14 development and test environment.
-2. Introduce database migrations.
-3. Add `ScannerSession` and session-candidate persistence.
-4. Isolate automatic demo data from operational mode.
-5. Add an Alpaca screener/feed entitlement probe.
-6. Add the first manual **Discover current candidates** API and dashboard action.
-7. Display session, source, delay, and freshness state in the scanner UI.
+1. Add `ScannerSession` and session-candidate persistence.
+2. Add the first manual **Discover current candidates** API and dashboard action.
+3. Display session, source, delay, and freshness state in the scanner UI.
 
 This establishes the backbone required for subsequent metric calculation, catalyst enrichment, scheduling, and replay without another scanner data-model rewrite.
 
@@ -220,4 +223,3 @@ The scanner is complete for its declared data tier when:
 - Partial and failed runs are obvious in both the API and dashboard.
 - Historical sessions can be selected and replayed without future-data leakage.
 - Automated tests cover discovery, session isolation, score reproducibility, source failures, and stale-data behavior.
-

@@ -256,7 +256,12 @@ def parse_scanner_csv(content: bytes) -> list[ScannerSymbolCreate]:
     return payloads
 
 
-def upsert_scanner_symbols(db: Session, payloads: list[ScannerSymbolCreate]) -> list[ScannerSymbol]:
+def upsert_scanner_symbols(
+    db: Session,
+    payloads: list[ScannerSymbolCreate],
+    *,
+    data_origin: str = "manual_import",
+) -> list[ScannerSymbol]:
     tickers = [payload.ticker for payload in payloads]
     existing = {
         symbol.ticker: symbol
@@ -275,6 +280,7 @@ def upsert_scanner_symbols(db: Session, payloads: list[ScannerSymbolCreate]) -> 
             values.pop("ticker", None)
             for field, value in values.items():
                 setattr(symbol, field, value)
+            symbol.data_origin = data_origin
             symbols.append(symbol)
         db.commit()
     except Exception:
@@ -286,6 +292,11 @@ def upsert_scanner_symbols(db: Session, payloads: list[ScannerSymbolCreate]) -> 
     return symbols
 
 
-def import_scanner_csv_data(db: Session, content: bytes) -> list[ScannerSymbol]:
+def import_scanner_csv_data(
+    db: Session,
+    content: bytes,
+    *,
+    data_origin: str = "manual_import",
+) -> list[ScannerSymbol]:
     payloads = parse_scanner_csv(content)
-    return upsert_scanner_symbols(db, payloads)
+    return upsert_scanner_symbols(db, payloads, data_origin=data_origin)

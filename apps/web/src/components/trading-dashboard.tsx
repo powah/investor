@@ -1096,6 +1096,10 @@ function OperationsWorkspace({
 
   const killSwitchEngaged = automationSettings?.kill_switch_engaged ?? true;
   const paperOnly = automationSettings?.paper_only ?? true;
+  const brokerReady = Boolean(
+    integrationStatus?.broker.enabled &&
+      integrationStatus.broker.verification_status === "available",
+  );
   const executionByPlan = useMemo(
     () => new Map(executions.map((execution) => [execution.trade_plan_id, execution])),
     [executions],
@@ -1196,6 +1200,20 @@ function OperationsWorkspace({
       await loadOperations();
     } catch (syncError) {
       setError(apiMessage(syncError));
+    } finally {
+      setAction(null);
+    }
+  }
+
+  async function probeCapabilities() {
+    setAction("capability-probe");
+    setError(null);
+    try {
+      await apiFetch<unknown[]>("/integrations/capabilities/probe", { method: "POST" });
+      setNotice("Alpaca read endpoints and configured feeds were tested and recorded.");
+      await loadOperations();
+    } catch (probeError) {
+      setError(apiMessage(probeError));
     } finally {
       setAction(null);
     }
@@ -1460,10 +1478,28 @@ function OperationsWorkspace({
             <h3 id="connection-status-heading" className="font-semibold text-ink">Setup status</h3>
             <p className="mt-1 text-sm text-slate-500">Credentials stay in server environment settings and are never shown here.</p>
           </div>
-          <button className="text-button" type="button" disabled={loading} onClick={() => void loadOperations()}>
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
-            {loading ? "Checking" : "Refresh status"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="text-button"
+              type="button"
+              disabled={
+                loading ||
+                action === "capability-probe" ||
+                !integrationStatus?.market_data.configured
+              }
+              onClick={() => void probeCapabilities()}
+            >
+              <Radio
+                className={`h-4 w-4 ${action === "capability-probe" ? "animate-pulse" : ""}`}
+                aria-hidden="true"
+              />
+              {action === "capability-probe" ? "Testing access" : "Test Alpaca access"}
+            </button>
+            <button className="text-button" type="button" disabled={loading} onClick={() => void loadOperations()}>
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden="true" />
+              {loading ? "Checking" : "Refresh status"}
+            </button>
+          </div>
         </div>
         <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-5">
           <ConnectionCard title="Market data" connection={integrationStatus?.market_data ?? null} icon={Radio} />
@@ -1493,7 +1529,7 @@ function OperationsWorkspace({
           onSave={saveAutomationSettings}
           onKillSwitch={updateKillSwitch}
           onRun={runAutomation}
-          brokerReady={Boolean(integrationStatus?.broker.enabled)}
+          brokerReady={brokerReady}
         />
       </div>
 
@@ -1514,7 +1550,7 @@ function OperationsWorkspace({
         action={action}
         killSwitchEngaged={killSwitchEngaged}
         paperOnly={paperOnly}
-        brokerReady={Boolean(integrationStatus?.broker.enabled)}
+        brokerReady={brokerReady}
         onBrokerSync={syncBroker}
         onPrepare={prepareExecution}
         onApprove={approveExecution}
@@ -1608,6 +1644,9 @@ function connectionLabel(connection: ProviderConnectionStatus) {
 }
 
 function PaperOnlyBanner({ broker }: { broker: ProviderConnectionStatus | null }) {
+  const brokerReady = Boolean(
+    broker?.enabled && broker.verification_status === "available",
+  );
   return (
     <section className="overflow-hidden rounded-xl border border-teal-200 bg-teal-50" aria-label="Paper trading safety boundary">
       <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1631,7 +1670,7 @@ function PaperOnlyBanner({ broker }: { broker: ProviderConnectionStatus | null }
           </div>
         </div>
         <div className="shrink-0 text-sm font-semibold text-teal-900">
-          {broker?.enabled ? "Paper broker ready" : "Paper broker unavailable"}
+          {brokerReady ? "Paper broker verified" : "Paper broker unavailable"}
         </div>
       </div>
     </section>
@@ -1647,9 +1686,19 @@ function ConnectionCard({
   connection: ProviderConnectionStatus | null;
   icon: typeof Radio;
 }) {
-  const ready = Boolean(connection?.configured && connection.enabled);
+  const alpacaVerified = connection?.provider !== "alpaca" || connection.verification_status === "available";
+  const ready = Boolean(connection?.configured && connection.enabled && alpacaVerified);
   const sipUnverified = Boolean(connection?.source_feed === "sip" && !connection.enabled);
   const configuredButUnavailable = Boolean(connection?.configured && !connection.enabled);
+  const verifiedUnavailable = Boolean(
+    connection?.verification_status === "unavailable" ||
+      connection?.verification_status === "failed",
+  );
+  const notTested = Boolean(
+    connection?.provider === "alpaca" &&
+      connection.configured &&
+      connection.verification_status === "not_tested",
+  );
   return (
     <article className="rounded-xl border border-line bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1662,6 +1711,12 @@ function ConnectionCard({
               ? "Ready"
               : sipUnverified
                 ? "Access unverified"
+                : notTested
+                  ? "Not tested"
+                  : verifiedUnavailable
+                    ? connection?.verification_status === "failed"
+                      ? "Test failed"
+                      : "Unavailable"
                 : configuredButUnavailable
                   ? "Unavailable"
                   : "Needs setup"
@@ -1675,6 +1730,12 @@ function ConnectionCard({
       <p className="mt-2 text-xs leading-5 text-slate-500">
         {connection?.message ?? "This check runs only while Operations is open."}
       </p>
+      {connection?.verification_message && (
+        <p className="mt-2 border-t border-line pt-2 text-xs leading-5 text-slate-500">
+          {connection.verification_message}
+          {connection.verified_at ? ` Checked ${formatOperationTime(connection.verified_at)}.` : ""}
+        </p>
+      )}
     </article>
   );
 }
@@ -1721,7 +1782,14 @@ function FeedOperationsPanel({
   onSyncMarket: () => Promise<void>;
   onSyncNews: () => Promise<void>;
 }) {
-  const newsReady = Boolean(status?.news.enabled || status?.filings.enabled);
+  const marketReady = Boolean(
+    status?.market_data.enabled &&
+      status.market_data.verification_status === "available",
+  );
+  const newsReady = Boolean(
+    (status?.news.enabled && status.news.verification_status === "available") ||
+      status?.filings.enabled,
+  );
   return (
     <section className="panel overflow-hidden rounded-xl" aria-labelledby="feed-operations-heading">
       <div className="border-b border-line px-4 py-3">
@@ -1753,7 +1821,7 @@ function FeedOperationsPanel({
           <button
             className="primary-button mt-3 w-full"
             type="button"
-            disabled={!status?.market_data.enabled || action === "market-sync"}
+            disabled={!marketReady || action === "market-sync"}
             onClick={() => void onSyncMarket()}
           >
             <RefreshCw className={`h-4 w-4 ${action === "market-sync" ? "animate-spin" : ""}`} aria-hidden="true" />

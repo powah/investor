@@ -38,6 +38,7 @@ The `.env` file is ignored by Git. Never commit API keys or paste them into brow
 Create a free Alpaca paper account/key pair and set a contactable SEC identity:
 
 ```dotenv
+APP_MODE=operational
 ALPACA_API_KEY_ID=your-paper-key-id
 ALPACA_API_SECRET_KEY=your-paper-secret-key
 SEC_USER_AGENT=Your Name your-contact-email@example.com
@@ -69,10 +70,15 @@ docker compose up --build --force-recreate
 
 Do not add `-v` when restarting unless you intentionally want to delete the PostgreSQL volume and all local records.
 
+Compose runs `alembic upgrade head` in a one-shot migration service before the API starts.
+Application startup does not create or alter tables. The baseline migration can adopt a database
+created by the pre-migration release after validating that all expected legacy tables exist.
+
 ## Environment settings
 
 | Setting | Safe local value | Meaning |
 | --- | --- | --- |
+| `APP_MODE` | `operational` | Keeps automatically seeded sample candidates out of the operational scanner; use `demo` only deliberately |
 | `ALPACA_API_KEY_ID` | Paper key ID | Authenticates Alpaca data, news, and paper Trading API calls |
 | `ALPACA_API_SECRET_KEY` | Paper secret | Server-side secret; never exposed to the frontend |
 | `ALPACA_TRADING_BASE_URL` | `https://paper-api.alpaca.markets` | The only broker endpoint accepted by this release |
@@ -122,15 +128,16 @@ docker compose logs -f worker
 
 After the stack starts, open http://localhost:3000 and select **Operations**.
 
-1. Check the connection cards. Market/news and broker should show configured once Alpaca paper keys are present; SEC should show configured once `SEC_USER_AGENT` is present.
-2. Sync market data for scanner/watchlist symbols. When no symbols are entered, the API uses watched symbols first and then active scanner symbols, capped to a small local batch.
-3. Sync external events. Alpaca News and SEC EDGAR are run independently, and one provider can fail without turning the other event source into verified data.
-4. Review the imported headline/filing, open its source URL, choose the catalyst type and quality, and promote it manually. Unpromoted events do not receive catalyst score.
-5. Refresh the paper broker to inspect account status, market clock, positions, and recent orders through the provider-neutral broker contract.
-6. Create an execution intent only from a valid saved trade plan. Review its captured risk snapshot, approve it manually, and acknowledge any allowed warnings. A fresh IEX quote is fetched during submission preflight.
-7. Automation remains blocked until **Enable paper automation runs** is saved and the kill switch is deliberately released with the confirmation shown in Operations. Releasing the switch does not bypass manual approval or other checks.
-8. Submit one approved intent deliberately, or separately enable **Submit already-approved paper orders during a run**. The worker will consider it on a later poll; **Run paper automation** triggers the same cycle immediately. Every path executes the same fresh preflight and reconciles first.
-9. Inspect the returned blockers and intent status. Each transition is persisted in the automation audit history. If Alpaca's response is uncertain, do not create another intent or repeat the request; leave reconciliation to the persisted client order ID.
+1. Check the connection cards. Credentials alone show a provider as configured, not verified.
+2. Select **Test Alpaca access**. The server performs read-only requests against the configured scanner and execution feeds, Alpaca News, the two stock screener endpoints, and the paper account. Each result and request ID is persisted; no order endpoint is called.
+3. Sync market data for scanner/watchlist symbols. When no symbols are entered, the API uses watched symbols first and then active scanner symbols, capped to a small local batch.
+4. Sync external events. Alpaca News and SEC EDGAR are run independently, and one provider can fail without turning the other event source into verified data.
+5. Review the imported headline/filing, open its source URL, choose the catalyst type and quality, and promote it manually. Unpromoted events do not receive catalyst score.
+6. Refresh the paper broker to inspect account status, market clock, positions, and recent orders through the provider-neutral broker contract.
+7. Create an execution intent only from a valid saved trade plan. Review its captured risk snapshot, approve it manually, and acknowledge any allowed warnings. A fresh IEX quote is fetched during submission preflight.
+8. Automation remains blocked until **Enable paper automation runs** is saved and the kill switch is deliberately released with the confirmation shown in Operations. Releasing the switch does not bypass manual approval or other checks.
+9. Submit one approved intent deliberately, or separately enable **Submit already-approved paper orders during a run**. The worker will consider it on a later poll; **Run paper automation** triggers the same cycle immediately. Every path executes the same fresh preflight and reconciles first.
+10. Inspect the returned blockers and intent status. Each transition is persisted in the automation audit history. If Alpaca's response is uncertain, do not create another intent or repeat the request; leave reconciliation to the persisted client order ID.
 
 Only limit bracket/OTO paper orders are supported. Market orders, extended-hours orders, live orders, and automatic approval are not available.
 
@@ -174,12 +181,25 @@ Backend:
 
 ```bash
 cd apps/api
+../../.venv/bin/alembic -c alembic.ini upgrade head
 ../../.venv/bin/python -m pytest -q
 ```
+
+Create a migration after changing SQLAlchemy models:
+
+```bash
+cd apps/api
+../../.venv/bin/alembic -c alembic.ini revision --autogenerate -m "describe the schema change"
+../../.venv/bin/alembic -c alembic.ini upgrade head
+```
+
+Review every autogenerated revision before applying it. Do not restore
+`Base.metadata.create_all()` to application startup.
 
 ## Troubleshooting
 
 - **Operations says Alpaca is not configured:** confirm both paper key fields are set in `.env`, then recreate the stack.
+- **Alpaca is configured but not ready:** run **Test Alpaca access** and inspect the recorded endpoint/feed result.
 - **SEC sync is skipped:** set `SEC_USER_AGENT` to a contactable name/application and email.
 - **SIP entitlement error:** restore `ALPACA_SCANNER_FEED=delayed_sip` and `ALPACA_EXECUTION_FEED=iex`; this project does not include paid real-time SIP.
 - **Broker is blocked as unsafe:** restore the exact paper URL and `ALLOW_LIVE_TRADING=false`.

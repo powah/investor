@@ -67,6 +67,22 @@ class IntegrationSyncRun(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ProviderCapabilityCheck(Base):
+    __tablename__ = "provider_capability_checks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    capability: Mapped[str] = mapped_column(String(80), index=True)
+    endpoint: Mapped[str] = mapped_column(String(200))
+    source_feed: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    message: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    tested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class AutomationSettings(Base):
     __tablename__ = "automation_settings"
 

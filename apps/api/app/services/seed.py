@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -33,24 +33,28 @@ def ensure_risk_settings(db: Session) -> RiskSettings:
     return settings
 
 
-def import_sample_scanner_data(db: Session) -> list[ScannerSymbol]:
+def import_sample_scanner_data(
+    db: Session,
+    *,
+    data_origin: str = "sample_import",
+) -> list[ScannerSymbol]:
     path = _sample_path()
     if not path.exists():
         return []
 
-    return import_scanner_csv_data(db, path.read_bytes())
+    return import_scanner_csv_data(db, path.read_bytes(), data_origin=data_origin)
 
 
-def seed_database(db: Session) -> None:
+def initialize_application_data(db: Session, *, app_mode: str) -> None:
     ensure_risk_settings(db)
-    if db.query(ScannerSymbol).count() == 0:
-        symbols = import_sample_scanner_data(db)
+    if app_mode == "demo" and db.query(ScannerSymbol).filter(ScannerSymbol.data_origin == "demo").count() == 0:
+        symbols = import_sample_scanner_data(db, data_origin="demo")
         for symbol in symbols:
             if symbol.news_headline:
                 db.add(
                     Catalyst(
                         ticker=symbol.ticker,
-                        published_time=datetime.utcnow(),
+                        published_time=datetime.now(timezone.utc),
                         source="Sample CSV",
                         headline=symbol.news_headline,
                         catalyst_type=symbol.catalyst_type or "Manual",

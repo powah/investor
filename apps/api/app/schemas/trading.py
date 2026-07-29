@@ -35,6 +35,7 @@ class ScannerSymbolRead(ScannerSymbolBase):
 
     id: int
     status: str
+    data_origin: str
     created_at: datetime
     updated_at: datetime
     score: int
