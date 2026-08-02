@@ -14,6 +14,7 @@ The repository contains a usable local workflow from discovery through guarded p
 
 - Accessible Scanner, Watchlist, Trade planner, Journal, Analytics, Operations, and Risk rules workspaces.
 - Ranked scanner with search, workflow filters, CSV upload, score evidence, catalyst history, and risk warnings.
+- Additive immutable Scanner Sessions with a manual run control, fixed XNYS Trading Date and Market Phase, globally idempotent starts, lifecycle progress, and persisted required-source diagnostics.
 - Watch/unwatch state, persisted watch notes, and direct Watchlist → Planner → Journal handoffs.
 - Pre-trade sizing with entry, stop, target, position size, max loss, R multiple, warnings, and hard blockers.
 - Trade plans, journal entries, process tags, plan-adherence tracking, and basic analytics.
@@ -138,7 +139,7 @@ See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
 
 ## Current limitations
 
-- Historical candle replay and immutable date-scoped scanner sessions are not implemented.
+- Scanner Sessions currently capture run identity and Market-Movement Discovery lifecycle diagnostics; immutable Discovery Hits, Candidates, evidence, scoring, eligibility, and Actionable Current Session promotion remain later milestone slices.
 - Market, news, and filing imports are manually triggered REST syncs. The background worker streams paper order events, but it is not a market/news streaming consumer.
 - Alpaca News availability and freshness can vary with the free account entitlement.
 - Paid real-time SIP is represented as unverified and disabled; configuration alone is never reported as entitlement.
