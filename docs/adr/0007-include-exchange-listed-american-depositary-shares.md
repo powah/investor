@@ -1,0 +1,3 @@
+# Include exchange-listed American Depositary Shares
+
+The target instrument universe admits common stocks and American Depositary Shares listed on Nasdaq, the New York Stock Exchange, or NYSE American, while excluding funds, preferred shares, units, warrants, rights, and over-the-counter securities. American Depositary Shares are classified explicitly, including their underlying-share ratio and foreign-issuer status, rather than treated as ordinary U.S. common shares. Their inclusion broadens relevant catalyst discovery but requires ratio-aware fundamentals, foreign-issuer filing support, and careful corporate-action handling.

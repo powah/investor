@@ -1,0 +1,3 @@
+# Preserve scanner evidence as it was known
+
+A Scanner Session permanently retains the Candidate Evidence and Score Evaluation produced from the information available during that run, even when a source later corrects a value. Corrections, newer evidence, and recalculations are appended as separate records rather than overwriting the original evidence or score. Human research may append a Catalyst Review and a new Score Evaluation to a completed session without rerunning discovery; the actionable queue uses the latest applicable evaluation while the original automated result remains inspectable. This preserves an honest historical account and deterministic replay at the cost of retaining revisions and distinguishing original evaluations from later analysis.

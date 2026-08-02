@@ -1,0 +1,7 @@
+# Separate data tier from evidence freshness
+
+Candidate Evidence records Data Tier and Freshness independently. A recently obtained observation from an intentionally delayed consolidated feed is labelled as delayed but may still be fresh within that tier. Freshness is evaluated per evidence type using versioned maximum ages, so market observations, catalysts, fundamentals, and eligibility facts need not expire together. When evidence becomes stale, the original fact remains immutable but stops supporting current positive scoring or eligibility conclusions; a required stale eligibility fact makes eligibility unverified rather than ineligible. This avoids presenting delayed research evidence as real-time while still distinguishing healthy delayed ingestion from outdated data.
+
+The initial delayed consolidated SIP policy treats market evidence as fresh only while its provider event time is no more than 30 minutes old and its local observation time is no more than 15 minutes old. Later policy versions or other Data Tiers may use different limits without changing historical evaluations.
+
+Catalyst freshness uses market-reaction Trading Dates rather than wall-clock hours. A premarket or regular-hours Catalyst belongs to its publication Trading Date; an after-close Catalyst belongs to the next Trading Date. The initial policy keeps it fresh for that date and the next two Trading Dates, so weekends and exchange holidays do not consume the reaction window.

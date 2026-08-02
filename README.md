@@ -124,6 +124,8 @@ See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
 
 ## Documentation
 
+- [Domain language](CONTEXT.md)
+- [Architectural decisions](docs/adr/)
 - [Project plan](docs/project-plan.md)
 - [MVP scope](docs/mvp-scope.md)
 - [Technology stack](docs/tech-stack.md)

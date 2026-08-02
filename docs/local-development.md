@@ -178,7 +178,7 @@ ABVC,3.12,27,9.1,12.5,38,1.2,Contract,true,Company announces new distribution ag
 XYZ,1.84,16,4.3,55.0,120,2.4,Vague PR,false,Company provides strategic update
 ```
 
-The Scanner accepts UTF-8 CSV uploads with these required columns. Optional boolean columns `clean_daily_chart_room`, `holding_key_level`, and `no_dilution_red_flag` make their scoring evidence explicit. Use `true` or `false`; unverified values should not be treated as positive evidence.
+The current pre-session Scanner accepts UTF-8 CSV uploads with these required columns. Optional boolean columns `clean_daily_chart_room`, `holding_key_level`, and `no_dilution_red_flag` make its legacy scoring inputs explicit. Use `true` or `false`; unverified values should not be treated as positive evidence. The scanner-session milestone replaces these overloaded booleans with sourced Candidate Evidence and a human Capital Structure Review, while preserving imported rows as a non-actionable Legacy Import.
 
 ## Frontend/API proxy
 
