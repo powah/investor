@@ -26,6 +26,38 @@ export type ScannerSymbol = {
   updated_at: string;
 };
 
+export type ScannerSessionDiagnostic = {
+  source: string;
+  capability: string;
+  required: boolean;
+  status: "pending" | "running" | "completed" | "unavailable" | "failed" | "skipped";
+  records_count: number;
+  code: string | null;
+  message: string | null;
+  details: Record<string, unknown>;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type ScannerSession = {
+  id: number;
+  status: "running" | "completed" | "partial" | "failed" | "cancelled";
+  stage: "starting" | "market_movement_discovery" | "completed" | "failed" | "cancelled";
+  started_at: string;
+  completed_at: string | null;
+  trading_date: string;
+  market_phase: "premarket" | "regular" | "after_hours" | "closed";
+  scanner_policy_version: string;
+  scanner_policy_settings: Record<string, unknown>;
+  scoring_model_version: string;
+  progress: {
+    completed: number;
+    total: number;
+    percent: number;
+  };
+  diagnostics: ScannerSessionDiagnostic[];
+};
+
 export type WatchlistItem = {
   id: number;
   ticker: string;

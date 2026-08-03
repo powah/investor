@@ -57,6 +57,7 @@ import type {
   ProviderConnectionStatus,
   RiskSettings,
   RiskState,
+  ScannerSession,
   ScannerSymbol,
   TradePlan,
   WatchlistItem,
@@ -335,6 +336,7 @@ export function TradingDashboard() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [scanner, setScanner] = useState<ScannerSymbol[]>([]);
+  const [scannerSessions, setScannerSessions] = useState<ScannerSession[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [catalysts, setCatalysts] = useState<Catalyst[]>([]);
   const [settings, setSettings] = useState<RiskSettings | null>(null);
@@ -423,6 +425,8 @@ export function TradingDashboard() {
       return true;
     });
   }, [scanner, scannerSearch, scannerFilter, settings?.min_score_to_plan, watchedTickers]);
+  const displayedScannerSession = scannerSessions.find((session) => session.status === "running") ?? scannerSessions[0] ?? null;
+  const activeScannerSessionId = displayedScannerSession?.status === "running" ? displayedScannerSession.id : null;
   const planPreview = useMemo(
     () => calculatePlanPreview(planDraft, selectedSymbol, settings, riskState),
     [planDraft, selectedSymbol, settings, riskState],
@@ -430,9 +434,10 @@ export function TradingDashboard() {
 
   async function loadAll() {
     setError(null);
-    const [scannerData, watchlistData, catalystData, settingsData, riskStateData, planData, journalData, analyticsData] =
+    const [scannerData, scannerSessionData, watchlistData, catalystData, settingsData, riskStateData, planData, journalData, analyticsData] =
       await Promise.all([
         apiFetch<ScannerSymbol[]>("/scanner"),
+        apiFetch<ScannerSession[]>("/scanner-sessions"),
         apiFetch<WatchlistItem[]>("/watchlist"),
         apiFetch<Catalyst[]>("/catalysts"),
         apiFetch<RiskSettings>("/risk-settings"),
@@ -443,6 +448,7 @@ export function TradingDashboard() {
       ]);
 
     setScanner(scannerData);
+    setScannerSessions(scannerSessionData);
     setWatchlist(watchlistData);
     setCatalysts(catalystData);
     setSettings(settingsData);
@@ -492,6 +498,31 @@ export function TradingDashboard() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (activeScannerSessionId === null) {
+      return;
+    }
+
+    let cancelled = false;
+    async function refreshScannerSession() {
+      try {
+        const updated = await apiFetch<ScannerSession>(`/scanner-sessions/${activeScannerSessionId}`);
+        if (!cancelled) {
+          setScannerSessions((current) => [updated, ...current.filter((session) => session.id !== updated.id)]);
+        }
+      } catch {
+        // Keep the last persisted progress visible; the normal workspace refresh reports connectivity errors.
+      }
+    }
+
+    const interval = window.setInterval(() => void refreshScannerSession(), 1000);
+    void refreshScannerSession();
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeScannerSessionId]);
 
   function selectTicker(symbol: ScannerSymbol, riskSettings: RiskSettings | null = settings) {
     setSelectedTicker(symbol.ticker);
@@ -546,6 +577,25 @@ export function TradingDashboard() {
       await refreshWithNotice("Sample scanner data imported.");
     } catch (importError) {
       setError(apiMessage(importError));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function runScanner() {
+    setSaving("scanner-session");
+    setError(null);
+    const activeBeforeStart = scannerSessions.find((session) => session.status === "running") ?? null;
+    try {
+      const scannerSession = await apiFetch<ScannerSession>("/scanner-sessions", { method: "POST" });
+      setScannerSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
+      setNotice(
+        activeBeforeStart?.id === scannerSession.id
+          ? `Scanner Session #${scannerSession.id} is already running; showing its persisted progress.`
+          : `Scanner Session #${scannerSession.id} started for ${scannerSession.trading_date}.`,
+      );
+    } catch (scannerError) {
+      setError(apiMessage(scannerError));
     } finally {
       setSaving(null);
     }
@@ -893,6 +943,11 @@ export function TradingDashboard() {
                   eyebrow="Step 1 · Discover"
                   title="Scanner"
                   description="Prioritize catalyst-driven movers, then inspect the score and risk evidence before watching a name."
+                />
+                <ScannerSessionPanel
+                  scannerSession={displayedScannerSession}
+                  starting={saving === "scanner-session"}
+                  onRun={runScanner}
                 />
                 <ScannerToolbar
                   search={scannerSearch}
@@ -2700,6 +2755,119 @@ function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: 
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
       </div>
     </div>
+  );
+}
+
+function ScannerSessionPanel({
+  scannerSession,
+  starting,
+  onRun,
+}: {
+  scannerSession: ScannerSession | null;
+  starting: boolean;
+  onRun: () => Promise<void>;
+}) {
+  const phaseLabel = scannerSession?.market_phase.replace("_", " ") ?? "Not assigned";
+  const statusClasses =
+    scannerSession?.status === "completed"
+      ? "bg-teal-50 text-teal-800 ring-teal-200"
+      : scannerSession?.status === "failed" || scannerSession?.status === "cancelled"
+        ? "bg-red-50 text-red-800 ring-red-200"
+        : scannerSession?.status === "partial"
+          ? "bg-amber-50 text-amber-800 ring-amber-200"
+          : "bg-blue-50 text-blue-800 ring-blue-200";
+
+  return (
+    <section className="panel rounded-xl p-4" aria-label="Scanner Session run control">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-semibold text-ink">
+              {scannerSession ? `Scanner Session #${scannerSession.id}` : "No Scanner Session yet"}
+            </h3>
+            {scannerSession && (
+              <span className={`rounded-full px-2 py-1 text-xs font-semibold capitalize ring-1 ring-inset ${statusClasses}`}>
+                {scannerSession.status}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            {scannerSession
+              ? `${scannerSession.trading_date} · ${phaseLabel} · ${scannerSession.stage.replaceAll("_", " ")}`
+              : "Start an immutable attempt with a fixed U.S. exchange-session identity."}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Repeating this action while a run is active returns the same Scanner Session.
+          </p>
+        </div>
+        <button
+          className="button-primary inline-flex shrink-0 items-center justify-center gap-2"
+          type="button"
+          disabled={starting}
+          onClick={() => void onRun()}
+        >
+          {starting ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+          {starting ? "Starting…" : "Run scanner"}
+        </button>
+      </div>
+
+      {scannerSession && (
+        <div className="mt-4 space-y-3 border-t border-slate-200 pt-4">
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-600">
+              <span className="capitalize">{scannerSession.stage.replaceAll("_", " ")}</span>
+              <span>{scannerSession.progress.percent}%</span>
+            </div>
+            <div
+              className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100"
+              role="progressbar"
+              aria-label="Scanner Session progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={scannerSession.progress.percent}
+            >
+              <div
+                className={`h-full rounded-full ${scannerSession.status === "failed" ? "bg-red-500" : "bg-blue-600"}`}
+                style={{ width: `${scannerSession.progress.percent}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+            <span>Started {new Date(scannerSession.started_at).toLocaleString()}</span>
+            <span>{scannerSession.scanner_policy_version}</span>
+            <span>{scannerSession.scoring_model_version}</span>
+          </div>
+
+          <div className="space-y-2" aria-label="Required-source diagnostics">
+            {scannerSession.diagnostics.map((diagnostic) => (
+              <div
+                key={`${diagnostic.capability}-${diagnostic.source}`}
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  diagnostic.status === "failed" || diagnostic.status === "unavailable"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : "border-slate-200 bg-slate-50 text-slate-700"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold capitalize">{diagnostic.capability.replaceAll("_", " ")}</span>
+                  <span className="text-xs font-semibold uppercase tracking-wide">{diagnostic.status}</span>
+                </div>
+                <p className="mt-1 text-xs">
+                  {diagnostic.message ?? `${diagnostic.source} · ${diagnostic.required ? "required" : "supplementary"}`}
+                </p>
+                {diagnostic.code && <p className="mt-1 text-xs font-medium">Diagnostic: {diagnostic.code}</p>}
+                {Object.keys(diagnostic.details).length > 0 && (
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-white/70 p-2 text-[11px] leading-5 text-slate-700">
+                    {JSON.stringify(diagnostic.details, null, 2)}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

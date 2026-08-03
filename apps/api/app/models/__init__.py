@@ -10,6 +10,7 @@ from app.models.integrations import (
     MarketDataSnapshot,
     ProviderCapabilityCheck,
 )
+from app.models.scanner_sessions import ScannerSession, ScannerSessionDiagnostic
 from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol, TradePlan, WatchlistItem
 
 __all__ = [
@@ -26,6 +27,8 @@ __all__ = [
     "MarketDataSnapshot",
     "ProviderCapabilityCheck",
     "RiskSettings",
+    "ScannerSession",
+    "ScannerSessionDiagnostic",
     "ScannerSymbol",
     "TradePlan",
     "WatchlistItem",
