@@ -1,18 +1,8 @@
 import type { PlanDraft } from "@/lib/plan-preview";
 import type {
   Analytics,
-  AutomationRun,
-  AutomationSettings,
-  BrokerStreamState,
-  BrokerSync,
   Catalyst,
-  ExecutionAction,
-  ExecutionIntent,
-  ExternalNewsEvent,
-  IntegrationsStatus,
-  IntegrationSyncResult,
   JournalEntry,
-  MarketDataSnapshot,
   RiskSettings,
   RiskState,
   ScannerSession,
@@ -21,12 +11,15 @@ import type {
   WatchlistItem,
 } from "@/types/trading";
 import type {
-  AutomationDraft,
   CatalystDraft,
   JournalDraft,
-  PromotionDraft,
   RiskDraft,
 } from "./contracts";
+import type { AutomationRemote } from "./operations/automation";
+import type { ConnectionStatusRemote } from "./operations/connection-status";
+import type { DataFeedRemote } from "./operations/data-feeds";
+import type { EventReviewRemote } from "./operations/event-review";
+import type { PaperExecutionRemote } from "./operations/paper-execution";
 
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
@@ -69,25 +62,11 @@ export type AnalyticsRemote = {
   getSummary(): Promise<Analytics>;
 };
 
-export type OperationsRemote = {
-  getIntegrationsStatus(): Promise<IntegrationsStatus>;
-  listMarketSnapshots(): Promise<MarketDataSnapshot[]>;
-  listExternalEvents(): Promise<ExternalNewsEvent[]>;
-  getAutomationSettings(): Promise<AutomationSettings>;
-  listExecutions(): Promise<Array<ExecutionIntent | ExecutionAction>>;
-  getBrokerStream(): Promise<BrokerStreamState>;
-  syncMarketData(): Promise<IntegrationSyncResult>;
-  probeCapabilities(): Promise<unknown[]>;
-  syncNews(): Promise<IntegrationSyncResult>;
-  promoteExternalEvent(eventId: number, draft: PromotionDraft): Promise<ExternalNewsEvent>;
-  updateAutomationSettings(draft: AutomationDraft): Promise<AutomationSettings>;
-  updateKillSwitch(engaged: boolean, confirmation: string): Promise<AutomationSettings>;
-  syncBroker(): Promise<BrokerSync>;
-  prepareExecution(tradePlanId: number): Promise<ExecutionIntent | ExecutionAction>;
-  approveExecution(executionId: number): Promise<ExecutionIntent | ExecutionAction>;
-  submitExecution(executionId: number): Promise<ExecutionIntent | ExecutionAction>;
-  runAutomation(): Promise<AutomationRun>;
-};
+export type OperationsRemote = ConnectionStatusRemote &
+  DataFeedRemote &
+  EventReviewRemote &
+  AutomationRemote &
+  PaperExecutionRemote;
 
 export type TradingDashboardRemote = {
   scanner: ScannerRemote;
