@@ -1,6 +1,7 @@
 import type { PlanDraft } from "@/lib/plan-preview";
 import type { CandidateResearchRemote } from "@/modules/trading-dashboard/candidate-research/candidate-research";
 import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
+import type { WatchlistRemote } from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
 import type {
   Analytics,
   AutomationRun,
@@ -17,7 +18,6 @@ import type {
   RiskSettings,
   RiskState,
   TradePlan,
-  WatchlistItem,
 } from "@/types/trading";
 import type {
   AutomationDraft,
@@ -26,13 +26,7 @@ import type {
   RiskDraft,
 } from "./contracts";
 
-export type { CandidateResearchRemote, ScannerRemote };
-
-export type WatchlistRemote = {
-  listItems(): Promise<WatchlistItem[]>;
-  removeItem(ticker: string): Promise<void>;
-  saveNotes(ticker: string, notes: string): Promise<WatchlistItem>;
-};
+export type { CandidateResearchRemote, ScannerRemote, WatchlistRemote };
 
 export type RiskRulesRemote = {
   getSettings(): Promise<RiskSettings>;
