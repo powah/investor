@@ -115,7 +115,7 @@ export const httpTradingDashboardRemote: TradingDashboardRemote = {
       return apiFetch<ScannerSymbol[]>("/scanner/import-csv", { method: "POST", body });
     },
     updateCandidateStatus: (ticker, status) =>
-      apiFetch<ScannerSymbol>(`/scanner/${ticker}/status`, {
+      apiFetch<ScannerSymbol>(`/scanner/${encodeURIComponent(ticker)}/status`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       }),
@@ -130,7 +130,8 @@ export const httpTradingDashboardRemote: TradingDashboardRemote = {
   },
   watchlist: {
     listItems: () => apiFetch<WatchlistItem[]>("/watchlist"),
-    removeItem: (ticker) => apiFetch<void>(`/watchlist/${ticker}`, { method: "DELETE", emptyResponse: true }),
+    removeItem: (ticker) =>
+      apiFetch<void>(`/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE", emptyResponse: true }),
     saveNotes: (ticker, notes) =>
       apiFetch<WatchlistItem>("/watchlist", {
         method: "POST",
