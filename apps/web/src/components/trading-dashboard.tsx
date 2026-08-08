@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { EquityChart } from "@/components/equity-chart";
 import { ApiError, currency, number, todayIsoDate } from "@/lib/api";
-import { calculatePlanPreview, type PlanDraft, type PlanPreview } from "@/lib/plan-preview";
 import {
   CandidateDetailPanel,
   CandidateResearchPanel,
@@ -34,6 +33,7 @@ import {
 import type { JournalDraft } from "@/modules/trading-dashboard/contracts";
 import { httpTradingDashboardRemote } from "@/modules/trading-dashboard/http-remote";
 import { OperationsWorkspace } from "@/modules/trading-dashboard/operations-workspace";
+import { PlannerWorkspace, usePlannerWorkspace } from "@/modules/trading-dashboard/planner/planner-workspace";
 import type { TradingDashboardRemote } from "@/modules/trading-dashboard/remote";
 import { RiskStatePanel } from "@/modules/trading-dashboard/risk/risk-presentation";
 import {
@@ -147,7 +147,6 @@ export function LegacyTradingDashboard(
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [plans, setPlans] = useState<TradePlan[]>([]);
   const [journal, setJournal] = useState<JournalEntry[]>([]);
   const [analytics, setAnalytics] = useState<Analytics>(emptyAnalytics);
   const [watchNotes, setWatchNotes] = useState<Record<string, string>>({});
@@ -156,16 +155,6 @@ export function LegacyTradingDashboard(
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const [planDraft, setPlanDraft] = useState<PlanDraft>({
-    plan_date: todayIsoDate(),
-    ticker: "",
-    account_size: "",
-    max_risk_per_trade_pct: "",
-    entry_price: "",
-    stop_price: "",
-    target_price: "",
-  });
 
   const [journalDraft, setJournalDraft] = useState<JournalDraft>({
     trade_date: todayIsoDate(),
@@ -197,30 +186,31 @@ export function LegacyTradingDashboard(
   const selectedTicker = scannerWorkspace.selectedTicker;
   const selectedSymbol = scannerWorkspace.selectedCandidate;
   const selectedCatalysts = candidateResearch.selectedCatalysts;
+  const planner = usePlannerWorkspace(
+    remote.planner,
+    selectedSymbol,
+    settings,
+    riskState,
+  );
   const selectedWatchItem = useMemo(
     () => watchlist.find((item) => item.ticker === selectedTicker) ?? null,
     [watchlist, selectedTicker],
   );
-  const planPreview = useMemo(
-    () => calculatePlanPreview(planDraft, selectedSymbol, settings, riskState),
-    [planDraft, selectedSymbol, settings, riskState],
-  );
 
   async function loadAll() {
     setError(null);
-    const [scannerData, , watchlistData, riskData, planData, journalData, analyticsData] =
+    const [scannerData, , watchlistData, riskData, , journalData, analyticsData] =
       await Promise.all([
         scannerWorkspace.load(),
         candidateResearch.load(),
         remote.watchlist.listItems(),
         riskRules.load(),
-        remote.planner.listPlans(),
+        planner.load(),
         remote.journal.listEntries(),
         remote.analytics.getSummary(),
       ]);
 
     setWatchlist(watchlistData);
-    setPlans(planData);
     setJournal(journalData);
     setAnalytics(analyticsData);
     setWatchNotes((current) => {
@@ -232,12 +222,6 @@ export function LegacyTradingDashboard(
       });
       return next;
     });
-    setPlanDraft((current) => ({
-      ...current,
-      account_size: current.account_size || String(riskData.settings.account_size),
-      max_risk_per_trade_pct: current.max_risk_per_trade_pct || String(riskData.settings.max_risk_per_trade_pct),
-    }));
-
     const firstTicker = scannerData[0]?.ticker ?? "";
     if (!scannerWorkspace.selectedTicker && firstTicker) {
       selectTicker(scannerData[0], riskData.settings);
@@ -254,15 +238,7 @@ export function LegacyTradingDashboard(
   function selectTicker(symbol: ScannerSymbol, riskSettings: RiskSettings | null = settings) {
     scannerWorkspace.selectCandidate(symbol);
     candidateResearch.selectCandidate(symbol);
-    setPlanDraft((current) => ({
-      ...current,
-      ticker: symbol.ticker,
-      entry_price: symbol.price.toFixed(2),
-      stop_price: current.ticker === symbol.ticker ? current.stop_price : "",
-      target_price: current.ticker === symbol.ticker ? current.target_price : "",
-      account_size: current.account_size || String(riskSettings?.account_size ?? ""),
-      max_risk_per_trade_pct: current.max_risk_per_trade_pct || String(riskSettings?.max_risk_per_trade_pct ?? ""),
-    }));
+    planner.selectCandidate(symbol, riskSettings);
     setJournalDraft((current) => ({
       ...current,
       ticker: symbol.ticker,
@@ -443,15 +419,11 @@ export function LegacyTradingDashboard(
 
   async function savePlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving("plan");
     setError(null);
     try {
-      await remote.planner.createPlan(planDraft);
-      await refreshWithNotice("Trade plan saved.");
+      setNotice(await planner.save(loadAll));
     } catch (planError) {
       setError(apiMessage(planError));
-    } finally {
-      setSaving(null);
     }
   }
 
@@ -646,25 +618,11 @@ export function LegacyTradingDashboard(
           )}
 
           {activeView === "planner" && (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-              <div className="min-w-0 space-y-4">
-                <PageHeading
-                  eyebrow="Step 3 · Define risk"
-                  title="Trade planner"
-                  description="Set entry, invalidation, and target. Position size is calculated from your risk rules before anything is saved."
-                />
-                <PlannerPanel
-                  draft={planDraft}
-                  setDraft={setPlanDraft}
-                  onSubmit={savePlan}
-                  saving={saving === "plan"}
-                  plans={plans}
-                  canSubmit={planPreview.ready && planPreview.blockers.length === 0}
-                  onJournal={startJournalFromPlan}
-                />
-              </div>
-              <aside className="space-y-4 xl:sticky xl:top-[158px] xl:self-start">
-                <PlanPreviewPanel preview={planPreview} ticker={planDraft.ticker} />
+            <PlannerWorkspace
+              planner={planner}
+              onSubmit={savePlan}
+              onJournal={startJournalFromPlan}
+              candidatePresentation={
                 <CandidateDetailPanel
                   symbol={selectedSymbol}
                   catalysts={selectedCatalysts}
@@ -674,9 +632,9 @@ export function LegacyTradingDashboard(
                   onPlan={startPlan}
                   compact
                 />
-                <RiskStatePanel state={riskState} settings={settings} />
-              </aside>
-            </div>
+              }
+              riskPresentation={<RiskStatePanel state={riskState} settings={settings} />}
+            />
           )}
 
           {activeView === "journal" && (
@@ -723,7 +681,7 @@ export function LegacyTradingDashboard(
           )}
 
           {activeView === "operations" && (
-            <OperationsWorkspace remote={remote.operations} plans={plans} onWorkspaceRefresh={loadAll} />
+            <OperationsWorkspace remote={remote.operations} plans={planner.plans} onWorkspaceRefresh={loadAll} />
           )}
 
           {activeView === "settings" && (
@@ -743,6 +701,15 @@ function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: 
         <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink">{title}</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
       </div>
+    </div>
+  );
+}
+
+function PreviewStat({ label, value, emphasize = false }: { label: string; value: string; emphasize?: boolean }) {
+  return (
+    <div className={`rounded-lg px-3 py-2 ${emphasize ? "bg-blue-50 ring-1 ring-blue-100" : "bg-slate-50"}`}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className={`mt-1 ${emphasize ? "font-semibold text-blue-900" : "text-sm font-medium text-ink"}`}>{value}</div>
     </div>
   );
 }
@@ -781,65 +748,6 @@ function WatchNotesPanel({
         </div>
       </div>
     </section>
-  );
-}
-
-function PlanPreviewPanel({ preview, ticker }: { preview: PlanPreview; ticker: string }) {
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <Calculator className="h-4 w-4 text-blue-700" aria-hidden="true" />
-        <div>
-          <h3 className="font-semibold text-ink">Live risk preview</h3>
-          <p className="text-xs text-slate-500">{ticker ? `Sizing ${ticker}` : "Choose a ticker"}</p>
-        </div>
-      </div>
-      {!preview.ready ? (
-        <div className="px-4 py-8 text-center">
-          <ShieldCheck className="mx-auto h-6 w-6 text-slate-400" aria-hidden="true" />
-          <div className="mt-3 font-semibold text-ink">Define entry and stop</div>
-          <p className="mt-1 text-sm leading-6 text-slate-500">Sizing appears before save once the invalidation price is explicit.</p>
-        </div>
-      ) : (
-        <div className="space-y-4 p-4">
-          <div className="grid grid-cols-2 gap-3">
-            <PreviewStat label="Risk / share" value={currency(preview.riskPerShare)} />
-            <PreviewStat label="Cash risk cap" value={currency(preview.cashRisk)} />
-            <PreviewStat label="Position size" value={`${number(preview.shares, 0)} shares`} emphasize />
-            <PreviewStat label="Max loss" value={currency(preview.maxLoss)} emphasize />
-            <PreviewStat label="Reward" value={preview.rMultiple === null ? "No target" : `${number(preview.rMultiple, 2)}R`} />
-            <PreviewStat label="Plan state" value={preview.blockers.length ? "Blocked" : preview.warnings.length ? "Review" : "Ready"} />
-          </div>
-          {preview.blockers.map((blocker) => (
-            <div key={blocker} className="flex gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{blocker}</span>
-            </div>
-          ))}
-          {preview.warnings.map((warning) => (
-            <div key={warning} className="flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>{warning}</span>
-            </div>
-          ))}
-          {preview.blockers.length === 0 && preview.warnings.length === 0 && (
-            <div className="flex gap-2 rounded-lg bg-teal-50 px-3 py-2 text-sm text-teal-800">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>Plan fits the current risk rules.</span>
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function PreviewStat({ label, value, emphasize = false }: { label: string; value: string; emphasize?: boolean }) {
-  return (
-    <div className="rounded-lg bg-slate-50 px-3 py-2">
-      <div className="label">{label}</div>
-      <div className={`mt-1 ${emphasize ? "text-lg" : "text-sm"} font-semibold text-ink`}>{value}</div>
-    </div>
   );
 }
 
@@ -893,139 +801,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="label mb-1 block">{label}</span>
       {children}
     </label>
-  );
-}
-
-function PlannerPanel({
-  draft,
-  setDraft,
-  onSubmit,
-  saving,
-  plans,
-  canSubmit,
-  onJournal,
-}: {
-  draft: PlanDraft;
-  setDraft: React.Dispatch<React.SetStateAction<PlanDraft>>;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  saving: boolean;
-  plans: TradePlan[];
-  canSubmit: boolean;
-  onJournal: (plan: TradePlan) => void;
-}) {
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <Calculator className="h-4 w-4 text-blue-700" aria-hidden="true" />
-        <div>
-          <h3 className="font-semibold text-ink">Plan inputs</h3>
-          <p className="text-xs text-slate-500">Use the live preview to review size and every rule before saving.</p>
-        </div>
-      </div>
-      <form className="grid gap-3 px-4 py-4 sm:grid-cols-2" onSubmit={onSubmit}>
-        <Field label="Date">
-          <input
-            className="field"
-            type="date"
-            value={draft.plan_date}
-            onChange={(event) => setDraft((current) => ({ ...current, plan_date: event.target.value }))}
-          />
-        </Field>
-        <Field label="Ticker">
-          <input
-            className="field uppercase"
-            value={draft.ticker}
-            required
-            onChange={(event) => setDraft((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))}
-          />
-        </Field>
-        <Field label="Account size">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="0.01"
-            value={draft.account_size}
-            onChange={(event) => setDraft((current) => ({ ...current, account_size: event.target.value }))}
-          />
-        </Field>
-        <Field label="Risk per trade %">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            max="100"
-            step="0.01"
-            value={draft.max_risk_per_trade_pct}
-            onChange={(event) => setDraft((current) => ({ ...current, max_risk_per_trade_pct: event.target.value }))}
-          />
-        </Field>
-        <Field label="Entry">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            value={draft.entry_price}
-            onChange={(event) => setDraft((current) => ({ ...current, entry_price: event.target.value }))}
-          />
-          <span className="mt-1 block text-xs text-slate-500">Scanner price is a reference—not an entry signal.</span>
-        </Field>
-        <Field label="Stop">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            value={draft.stop_price}
-            onChange={(event) => setDraft((current) => ({ ...current, stop_price: event.target.value }))}
-          />
-        </Field>
-        <Field label="Target">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            value={draft.target_price}
-            onChange={(event) => setDraft((current) => ({ ...current, target_price: event.target.value }))}
-          />
-        </Field>
-        <div className="flex items-end">
-          <button className="primary-button w-full" type="submit" disabled={saving || !canSubmit}>
-            <Save className="h-4 w-4" />
-            {canSubmit ? "Save plan" : "Complete valid plan"}
-          </button>
-        </div>
-      </form>
-      <div className="max-h-[520px] overflow-y-auto border-t border-line">
-        {plans.map((plan) => (
-          <div key={plan.id} className="grid gap-3 border-b border-line px-4 py-3 text-sm last:border-b-0 sm:grid-cols-[1fr_auto]">
-            <div>
-              <div className="flex flex-wrap items-center gap-2 font-semibold text-ink">
-                <span>{plan.ticker} · {number(plan.shares, 0)} shares</span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{plan.plan_date}</span>
-              </div>
-              <div className="mt-1 text-slate-500">
-                Entry {currency(plan.entry_price)} · stop {currency(plan.stop_price)} · max loss {currency(plan.max_loss)}
-              </div>
-              {plan.warnings.map((warning) => (
-                <div key={warning} className="mt-1 text-amber-700">{warning}</div>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 sm:flex-col sm:items-end">
-              <div className="font-semibold text-slate-700">{plan.r_multiple ? `${number(plan.r_multiple, 2)}R` : "No target"}</div>
-              <button className="text-button" type="button" onClick={() => onJournal(plan)}>
-                Journal <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        ))}
-        {plans.length === 0 && <div className="px-4 py-4 text-sm text-slate-500">No trade plans saved.</div>}
-      </div>
-    </section>
   );
 }
 

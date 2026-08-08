@@ -1,5 +1,5 @@
 import { apiFetch } from "@/lib/api";
-import type { PlanDraft } from "@/lib/plan-preview";
+import type { PlanDraft } from "@/modules/trading-dashboard/planner/plan-preview";
 import type {
   Analytics,
   AutomationRun,

@@ -15,6 +15,7 @@ import type {
   AutomationSettings,
   BrokerStreamState,
   IntegrationsStatus,
+  TradePlan,
   WatchlistItem,
 } from "@/types/trading";
 
@@ -100,6 +101,23 @@ const brokerStream: BrokerStreamState = {
   updated_at: "2026-08-03T12:00:00Z",
 };
 
+const tradePlan: TradePlan = {
+  id: 1,
+  plan_date: "2026-08-03",
+  ticker: "ALFA",
+  account_size: 25_000,
+  max_risk_per_trade_pct: 1,
+  entry_price: 10,
+  stop_price: 9.5,
+  target_price: 11.5,
+  risk_per_share: 0.5,
+  shares: 500,
+  max_loss: 250,
+  r_multiple: 3,
+  warnings: [],
+  created_at: "2026-08-03T12:00:00Z",
+};
+
 export class InMemoryDashboardRemote implements TradingDashboardRemote {
   readonly requestedOperations: string[] = [];
 
@@ -150,7 +168,7 @@ export class InMemoryDashboardRemote implements TradingDashboardRemote {
   };
 
   readonly planner: PlannerRemote = {
-    listPlans: () => this.result("planner.listPlans", []),
+    listPlans: () => this.result("planner.listPlans", [tradePlan]),
     createPlan: () => this.unsupported("planner.createPlan"),
   };
 
