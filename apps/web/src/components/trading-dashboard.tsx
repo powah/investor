@@ -1,5 +1,3 @@
-"use client";
-
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -41,10 +39,17 @@ import {
 import { EquityChart } from "@/components/equity-chart";
 import { ApiError, currency, number, todayIsoDate } from "@/lib/api";
 import { calculatePlanPreview, type PlanDraft, type PlanPreview } from "@/lib/plan-preview";
-import { httpRemoteSystem, type RemoteSystem } from "@/lib/remote-system";
+import type {
+  AutomationDraft,
+  CatalystDraft,
+  JournalDraft,
+  PromotionDraft,
+  RiskDraft,
+} from "@/modules/trading-dashboard/contracts";
+import { httpTradingDashboardRemote } from "@/modules/trading-dashboard/http-remote";
+import type { OperationsRemote, TradingDashboardRemote } from "@/modules/trading-dashboard/remote";
 import type {
   Analytics,
-  AutomationRun,
   AutomationSettings,
   BrokerStreamState,
   BrokerSync,
@@ -67,59 +72,6 @@ import type {
 
 type WorkspaceView = "scanner" | "watchlist" | "planner" | "journal" | "analytics" | "operations" | "settings";
 type ScannerFilter = "all" | "qualified" | "watching" | "caution";
-
-type CatalystDraft = {
-  ticker: string;
-  published_time: string;
-  source: string;
-  headline: string;
-  catalyst_type: string;
-  quality_score: string;
-};
-
-type JournalDraft = {
-  trade_date: string;
-  ticker: string;
-  setup: string;
-  catalyst_type: string;
-  entry_price: string;
-  stop_price: string;
-  exit_price: string;
-  shares: string;
-  pnl: string;
-  notes: string;
-  mistake_tags: string;
-  followed_plan: boolean;
-};
-
-type RiskDraft = {
-  account_size: string;
-  max_risk_per_trade_pct: string;
-  max_daily_loss: string;
-  max_trades_per_day: string;
-  max_consecutive_losses: string;
-  allowed_start_time: string;
-  allowed_end_time: string;
-  min_score_to_plan: string;
-  max_spread_pct: string;
-  max_position_shares: string;
-  require_above_vwap: boolean;
-};
-
-type AutomationDraft = {
-  enabled: boolean;
-  auto_submit_approved: boolean;
-  require_manual_approval: boolean;
-  max_orders_per_day: string;
-  max_order_notional: string;
-  max_quote_age_seconds: string;
-  max_price_deviation_pct: string;
-};
-
-type PromotionDraft = {
-  catalyst_type: string;
-  quality_score: string;
-};
 
 type ExecutionReview = {
   blockers: string[];
@@ -217,10 +169,6 @@ function toNumber(value: string) {
   return Number(value);
 }
 
-function optionalNumber(value: string) {
-  return value.trim() === "" ? undefined : Number(value);
-}
-
 const workspaceNavigation: Array<{
   id: WorkspaceView;
   label: string;
@@ -236,8 +184,9 @@ const workspaceNavigation: Array<{
   { id: "settings", label: "Risk rules", description: "Set guardrails", icon: Settings },
 ];
 
-export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: RemoteSystem } = {}) {
-  const apiFetch = remote.request;
+export function LegacyTradingDashboard(
+  { remote = httpTradingDashboardRemote }: { remote?: TradingDashboardRemote } = {},
+) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [scanner, setScanner] = useState<ScannerSymbol[]>([]);
@@ -341,15 +290,15 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setError(null);
     const [scannerData, scannerSessionData, watchlistData, catalystData, settingsData, riskStateData, planData, journalData, analyticsData] =
       await Promise.all([
-        apiFetch<ScannerSymbol[]>("/scanner"),
-        apiFetch<ScannerSession[]>("/scanner-sessions"),
-        apiFetch<WatchlistItem[]>("/watchlist"),
-        apiFetch<Catalyst[]>("/catalysts"),
-        apiFetch<RiskSettings>("/risk-settings"),
-        apiFetch<RiskState>("/risk-state"),
-        apiFetch<TradePlan[]>("/trade-plans"),
-        apiFetch<JournalEntry[]>("/journal"),
-        apiFetch<Analytics>("/analytics"),
+        remote.scanner.listCandidates(),
+        remote.scanner.listSessions(),
+        remote.watchlist.listItems(),
+        remote.candidateResearch.listCatalysts(),
+        remote.riskRules.getSettings(),
+        remote.riskRules.getState(),
+        remote.planner.listPlans(),
+        remote.journal.listEntries(),
+        remote.analytics.getSummary(),
       ]);
 
     setScanner(scannerData);
@@ -408,11 +357,12 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     if (activeScannerSessionId === null) {
       return;
     }
+    const scannerSessionId = activeScannerSessionId;
 
     let cancelled = false;
     async function refreshScannerSession() {
       try {
-        const updated = await apiFetch<ScannerSession>(`/scanner-sessions/${activeScannerSessionId}`);
+        const updated = await remote.scanner.getSession(scannerSessionId);
         if (!cancelled) {
           setScannerSessions((current) => [updated, ...current.filter((session) => session.id !== updated.id)]);
         }
@@ -427,7 +377,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeScannerSessionId, apiFetch]);
+  }, [activeScannerSessionId, remote.scanner]);
 
   function selectTicker(symbol: ScannerSymbol, riskSettings: RiskSettings | null = settings) {
     setSelectedTicker(symbol.ticker);
@@ -478,7 +428,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("import");
     setError(null);
     try {
-      await apiFetch<ScannerSymbol[]>("/scanner/import-sample", { method: "POST" });
+      await remote.scanner.importSampleCandidates();
       await refreshWithNotice("Sample scanner data imported.");
     } catch (importError) {
       setError(apiMessage(importError));
@@ -492,7 +442,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setError(null);
     const activeBeforeStart = scannerSessions.find((session) => session.status === "running") ?? null;
     try {
-      const scannerSession = await apiFetch<ScannerSession>("/scanner-sessions", { method: "POST" });
+      const scannerSession = await remote.scanner.startSession();
       setScannerSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
       setNotice(
         activeBeforeStart?.id === scannerSession.id
@@ -516,9 +466,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("csv-import");
     setError(null);
     try {
-      const body = new FormData();
-      body.append("file", file);
-      await apiFetch<ScannerSymbol[]>("/scanner/import-csv", { method: "POST", body });
+      await remote.scanner.importCandidatesCsv(file);
       await refreshWithNotice(`${file.name} imported into the scanner.`);
       setActiveView("scanner");
     } catch (importError) {
@@ -532,10 +480,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving(`${ticker}-${status}`);
     setError(null);
     try {
-      await apiFetch<ScannerSymbol>(`/scanner/${ticker}/status`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
+      await remote.scanner.updateCandidateStatus(ticker, status);
       await refreshWithNotice(status === "watch" ? `${ticker} saved to watchlist.` : `${ticker} marked ${status}.`);
     } catch (statusError) {
       setError(apiMessage(statusError));
@@ -552,7 +497,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving(`remove-${ticker}`);
     setError(null);
     try {
-      await apiFetch<void>(`/watchlist/${ticker}`, { method: "DELETE", emptyResponse: true });
+      await remote.watchlist.removeItem(ticker);
       await refreshWithNotice(`${ticker} removed from watchlist.`);
     } catch (removeError) {
       setError(apiMessage(removeError));
@@ -565,10 +510,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving(`note-${ticker}`);
     setError(null);
     try {
-      await apiFetch<WatchlistItem>("/watchlist", {
-        method: "POST",
-        body: JSON.stringify({ ticker, notes: watchNotes[ticker] || null }),
-      });
+      await remote.watchlist.saveNotes(ticker, watchNotes[ticker] || "");
       await refreshWithNotice(`${ticker} watch notes saved.`);
     } catch (noteError) {
       setError(apiMessage(noteError));
@@ -621,14 +563,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("catalyst");
     setError(null);
     try {
-      await apiFetch("/catalysts", {
-        method: "POST",
-        body: JSON.stringify({
-          ...catalystDraft,
-          ticker: catalystDraft.ticker.toUpperCase(),
-          quality_score: toNumber(catalystDraft.quality_score),
-        }),
-      });
+      await remote.candidateResearch.createCatalystReview(catalystDraft);
       await refreshWithNotice("Catalyst saved.");
       setCatalystDraft((current) => ({ ...current, headline: "" }));
     } catch (catalystError) {
@@ -647,22 +582,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("settings");
     setError(null);
     try {
-      await apiFetch<RiskSettings>("/risk-settings", {
-        method: "PUT",
-        body: JSON.stringify({
-          account_size: toNumber(riskDraft.account_size),
-          max_risk_per_trade_pct: toNumber(riskDraft.max_risk_per_trade_pct),
-          max_daily_loss: toNumber(riskDraft.max_daily_loss),
-          max_trades_per_day: toNumber(riskDraft.max_trades_per_day),
-          max_consecutive_losses: toNumber(riskDraft.max_consecutive_losses),
-          allowed_start_time: riskDraft.allowed_start_time,
-          allowed_end_time: riskDraft.allowed_end_time,
-          min_score_to_plan: toNumber(riskDraft.min_score_to_plan),
-          max_spread_pct: toNumber(riskDraft.max_spread_pct),
-          max_position_shares: toNumber(riskDraft.max_position_shares),
-          require_above_vwap: riskDraft.require_above_vwap,
-        }),
-      });
+      await remote.riskRules.updateSettings(riskDraft);
       await refreshWithNotice("Risk settings saved.");
     } catch (settingsError) {
       setError(apiMessage(settingsError));
@@ -676,18 +596,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("plan");
     setError(null);
     try {
-      await apiFetch<TradePlan>("/trade-plans", {
-        method: "POST",
-        body: JSON.stringify({
-          plan_date: planDraft.plan_date,
-          ticker: planDraft.ticker.toUpperCase(),
-          account_size: optionalNumber(planDraft.account_size),
-          max_risk_per_trade_pct: optionalNumber(planDraft.max_risk_per_trade_pct),
-          entry_price: toNumber(planDraft.entry_price),
-          stop_price: optionalNumber(planDraft.stop_price),
-          target_price: optionalNumber(planDraft.target_price),
-        }),
-      });
+      await remote.planner.createPlan(planDraft);
       await refreshWithNotice("Trade plan saved.");
     } catch (planError) {
       setError(apiMessage(planError));
@@ -701,26 +610,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
     setSaving("journal");
     setError(null);
     try {
-      await apiFetch<JournalEntry>("/journal", {
-        method: "POST",
-        body: JSON.stringify({
-          trade_date: journalDraft.trade_date,
-          ticker: journalDraft.ticker.toUpperCase(),
-          setup: journalDraft.setup,
-          catalyst_type: journalDraft.catalyst_type || null,
-          entry_price: toNumber(journalDraft.entry_price),
-          stop_price: toNumber(journalDraft.stop_price),
-          exit_price: toNumber(journalDraft.exit_price),
-          shares: toNumber(journalDraft.shares),
-          pnl: optionalNumber(journalDraft.pnl),
-          notes: journalDraft.notes || null,
-          mistake_tags: journalDraft.mistake_tags
-            .split(",")
-            .map((tag) => tag.trim())
-            .filter(Boolean),
-          followed_plan: journalDraft.followed_plan,
-        }),
-      });
+      await remote.journal.createEntry(journalDraft);
       await refreshWithNotice("Journal entry saved.");
       setJournalDraft((current) => ({
         ...current,
@@ -1004,7 +894,7 @@ export function TradingDashboard({ remote = httpRemoteSystem }: { remote?: Remot
           )}
 
           {activeView === "operations" && (
-            <OperationsWorkspace remote={remote} plans={plans} onWorkspaceRefresh={loadAll} />
+            <OperationsWorkspace remote={remote.operations} plans={plans} onWorkspaceRefresh={loadAll} />
           )}
 
           {activeView === "settings" && (
@@ -1036,11 +926,10 @@ function OperationsWorkspace({
   plans,
   onWorkspaceRefresh,
 }: {
-  remote: RemoteSystem;
+  remote: OperationsRemote;
   plans: TradePlan[];
   onWorkspaceRefresh: () => Promise<void>;
 }) {
-  const apiFetch = remote.request;
   const [integrationStatus, setIntegrationStatus] = useState<IntegrationsStatus | null>(null);
   const [marketSnapshots, setMarketSnapshots] = useState<MarketDataSnapshot[]>([]);
   const [newsEvents, setNewsEvents] = useState<ExternalNewsEvent[]>([]);
@@ -1081,12 +970,12 @@ function OperationsWorkspace({
     setLoading(true);
     const [statusResult, snapshotResult, newsResult, automationResult, executionResult, streamResult] =
       await Promise.allSettled([
-        apiFetch<IntegrationsStatus>("/integrations/status"),
-        apiFetch<MarketDataSnapshot[]>("/integrations/market-data/snapshots"),
-        apiFetch<ExternalNewsEvent[]>("/integrations/news-events"),
-        apiFetch<AutomationSettings>("/integrations/automation/settings"),
-        apiFetch<Array<ExecutionIntent | ExecutionAction>>("/integrations/executions"),
-        apiFetch<BrokerStreamState>("/integrations/broker/stream"),
+        remote.getIntegrationsStatus(),
+        remote.listMarketSnapshots(),
+        remote.listExternalEvents(),
+        remote.getAutomationSettings(),
+        remote.listExecutions(),
+        remote.getBrokerStream(),
       ]);
 
     const failures: string[] = [];
@@ -1155,10 +1044,7 @@ function OperationsWorkspace({
     setAction("market-sync");
     setError(null);
     try {
-      const result = await apiFetch<IntegrationSyncResult>("/integrations/market-data/sync", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      const result = await remote.syncMarketData();
       setNotice(syncResultMessage(result, "Market data sync finished"));
       await loadOperations();
     } catch (syncError) {
@@ -1172,7 +1058,7 @@ function OperationsWorkspace({
     setAction("capability-probe");
     setError(null);
     try {
-      await apiFetch<unknown[]>("/integrations/capabilities/probe", { method: "POST" });
+      await remote.probeCapabilities();
       setNotice("Alpaca read endpoints and configured feeds were tested and recorded.");
       await loadOperations();
     } catch (probeError) {
@@ -1186,10 +1072,7 @@ function OperationsWorkspace({
     setAction("news-sync");
     setError(null);
     try {
-      const result = await apiFetch<IntegrationSyncResult>("/integrations/news/sync", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      const result = await remote.syncNews();
       setNotice(syncResultMessage(result, "External event sync finished"));
       await loadOperations();
     } catch (syncError) {
@@ -1207,13 +1090,7 @@ function OperationsWorkspace({
     setAction(`promote-${event.id}`);
     setError(null);
     try {
-      await apiFetch<ExternalNewsEvent>(`/integrations/news-events/${event.id}/promote`, {
-        method: "POST",
-        body: JSON.stringify({
-          catalyst_type: draft.catalyst_type.trim(),
-          quality_score: toNumber(draft.quality_score),
-        }),
-      });
+      await remote.promoteExternalEvent(event.id, draft);
       setNotice(`${event.ticker} was promoted only after your catalyst review.`);
       await Promise.all([loadOperations(), onWorkspaceRefresh()]);
     } catch (promotionError) {
@@ -1231,18 +1108,7 @@ function OperationsWorkspace({
     setAction("automation-settings");
     setError(null);
     try {
-      const updated = await apiFetch<AutomationSettings>("/integrations/automation/settings", {
-        method: "PUT",
-        body: JSON.stringify({
-          enabled: automationDraft.enabled,
-          auto_submit_approved: automationDraft.auto_submit_approved,
-          require_manual_approval: automationDraft.require_manual_approval,
-          max_orders_per_day: toNumber(automationDraft.max_orders_per_day),
-          max_order_notional: toNumber(automationDraft.max_order_notional),
-          max_quote_age_seconds: toNumber(automationDraft.max_quote_age_seconds),
-          max_price_deviation_pct: toNumber(automationDraft.max_price_deviation_pct),
-        }),
-      });
+      const updated = await remote.updateAutomationSettings(automationDraft);
       setAutomationSettings(updated);
       setAutomationDraft(toAutomationDraft(updated));
       setNotice("Paper automation settings saved. The kill switch remains the final authority.");
@@ -1257,13 +1123,7 @@ function OperationsWorkspace({
     setAction("kill-switch");
     setError(null);
     try {
-      const updated = await apiFetch<AutomationSettings>("/integrations/automation/kill-switch", {
-        method: "POST",
-        body: JSON.stringify({
-          engaged,
-          confirmation: engaged ? "" : killConfirmation,
-        }),
-      });
+      const updated = await remote.updateKillSwitch(engaged, killConfirmation);
       setAutomationSettings(updated);
       setAutomationDraft(toAutomationDraft(updated));
       setKillConfirmation("");
@@ -1283,7 +1143,7 @@ function OperationsWorkspace({
     setAction("broker-sync");
     setError(null);
     try {
-      const synced = await apiFetch<BrokerSync>("/integrations/broker/sync");
+      const synced = await remote.syncBroker();
       setBrokerSync(synced);
       setNotice("Paper broker account, positions, and orders reconciled.");
       await loadOperations();
@@ -1314,14 +1174,7 @@ function OperationsWorkspace({
     setAction(`prepare-${plan.id}`);
     setError(null);
     try {
-      const response = await apiFetch<ExecutionIntent | ExecutionAction>("/integrations/executions", {
-        method: "POST",
-        body: JSON.stringify({
-          trade_plan_id: plan.id,
-          order_type: "limit",
-          time_in_force: "day",
-        }),
-      });
+      const response = await remote.prepareExecution(plan.id);
       const normalized = storeExecutionResponse(response);
       setNotice(
         normalized.blockers.length
@@ -1340,13 +1193,7 @@ function OperationsWorkspace({
     setAction(`approve-${execution.id}`);
     setError(null);
     try {
-      const response = await apiFetch<ExecutionIntent | ExecutionAction>(
-        `/integrations/executions/${execution.id}/approve`,
-        {
-          method: "POST",
-          body: JSON.stringify({ acknowledge_warnings: true }),
-        },
-      );
+      const response = await remote.approveExecution(execution.id);
       const normalized = storeExecutionResponse(response);
       setNotice(
         normalized.blockers.length
@@ -1365,10 +1212,7 @@ function OperationsWorkspace({
     setAction(`submit-${execution.id}`);
     setError(null);
     try {
-      const response = await apiFetch<ExecutionIntent | ExecutionAction>(
-        `/integrations/executions/${execution.id}/submit`,
-        { method: "POST" },
-      );
+      const response = await remote.submitExecution(execution.id);
       const normalized = storeExecutionResponse(response);
       const ticker = executionTicker(execution, plans);
       const status = normalized.intent.status;
@@ -1398,9 +1242,7 @@ function OperationsWorkspace({
     setAction("automation-run");
     setError(null);
     try {
-      const result = await apiFetch<AutomationRun>("/integrations/automation/run", {
-        method: "POST",
-      });
+      const result = await remote.runAutomation();
       setNotice(
         `Paper run processed ${result.processed}, submitted ${result.submitted}, reconciled ${result.reconciled}, failed ${result.failed}.`,
       );
