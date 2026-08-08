@@ -1,11 +1,12 @@
 import type { PlanDraft } from "@/lib/plan-preview";
+import type { CandidateResearchRemote } from "@/modules/trading-dashboard/candidate-research/candidate-research";
+import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
 import type {
   Analytics,
   AutomationRun,
   AutomationSettings,
   BrokerStreamState,
   BrokerSync,
-  Catalyst,
   ExecutionAction,
   ExecutionIntent,
   ExternalNewsEvent,
@@ -15,33 +16,17 @@ import type {
   MarketDataSnapshot,
   RiskSettings,
   RiskState,
-  ScannerSession,
-  ScannerSymbol,
   TradePlan,
   WatchlistItem,
 } from "@/types/trading";
 import type {
   AutomationDraft,
-  CatalystDraft,
   JournalDraft,
   PromotionDraft,
   RiskDraft,
 } from "./contracts";
 
-export type ScannerRemote = {
-  listCandidates(): Promise<ScannerSymbol[]>;
-  listSessions(): Promise<ScannerSession[]>;
-  getSession(sessionId: number): Promise<ScannerSession>;
-  importSampleCandidates(): Promise<ScannerSymbol[]>;
-  startSession(): Promise<ScannerSession>;
-  importCandidatesCsv(file: File): Promise<ScannerSymbol[]>;
-  updateCandidateStatus(ticker: string, status: ScannerSymbol["status"]): Promise<ScannerSymbol>;
-};
-
-export type CandidateResearchRemote = {
-  listCatalysts(): Promise<Catalyst[]>;
-  createCatalystReview(draft: CatalystDraft): Promise<void>;
-};
+export type { CandidateResearchRemote, ScannerRemote };
 
 export type WatchlistRemote = {
   listItems(): Promise<WatchlistItem[]>;
