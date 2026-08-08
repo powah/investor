@@ -24,9 +24,9 @@ import type {
 import type {
   AutomationDraft,
   CatalystDraft,
-  JournalDraft,
   PromotionDraft,
 } from "./contracts";
+import type { JournalDraft } from "./journal/journal-workspace";
 import { riskSettingsPayload } from "./risk/risk-rules-workspace";
 import type { TradingDashboardRemote } from "./remote";
 

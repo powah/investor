@@ -1,9 +1,10 @@
 import type { CandidateResearchRemote } from "@/modules/trading-dashboard/candidate-research/candidate-research";
+import type { AnalyticsRemote } from "@/modules/trading-dashboard/analytics/analytics-workspace";
+import type { JournalRemote } from "@/modules/trading-dashboard/journal/journal-workspace";
 import type { PlannerRemote } from "@/modules/trading-dashboard/planner/planner-workspace";
 import type { RiskRulesRemote } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
 import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
 import type {
-  Analytics,
   AutomationRun,
   AutomationSettings,
   BrokerStreamState,
@@ -13,32 +14,21 @@ import type {
   ExternalNewsEvent,
   IntegrationsStatus,
   IntegrationSyncResult,
-  JournalEntry,
   MarketDataSnapshot,
   TradePlan,
   WatchlistItem,
 } from "@/types/trading";
 import type {
   AutomationDraft,
-  JournalDraft,
   PromotionDraft,
 } from "./contracts";
 
-export type { CandidateResearchRemote, PlannerRemote, RiskRulesRemote, ScannerRemote };
+export type { AnalyticsRemote, CandidateResearchRemote, JournalRemote, PlannerRemote, RiskRulesRemote, ScannerRemote };
 
 export type WatchlistRemote = {
   listItems(): Promise<WatchlistItem[]>;
   removeItem(ticker: string): Promise<void>;
   saveNotes(ticker: string, notes: string): Promise<WatchlistItem>;
-};
-
-export type JournalRemote = {
-  listEntries(): Promise<JournalEntry[]>;
-  createEntry(draft: JournalDraft): Promise<JournalEntry>;
-};
-
-export type AnalyticsRemote = {
-  getSummary(): Promise<Analytics>;
 };
 
 export type OperationsRemote = {
