@@ -66,6 +66,7 @@ export function useScannerWorkspace(
   const [selectedTicker, setSelectedTicker] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ScannerFilter>("all");
+  const [action, setAction] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [candidateData, sessionData] = await Promise.all([
@@ -135,28 +136,43 @@ export function useScannerWorkspace(
   }, []);
 
   const startSession = useCallback(async () => {
-    const activeBeforeStart = sessions.find((session) => session.status === "running") ?? null;
-    const scannerSession = await remote.startSession();
-    setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
-    return activeBeforeStart?.id === scannerSession.id
-      ? `Scanner Session #${scannerSession.id} is already running; showing its persisted progress.`
-      : `Scanner Session #${scannerSession.id} started for ${scannerSession.trading_date}.`;
+    setAction("scanner-session");
+    try {
+      const activeBeforeStart = sessions.find((session) => session.status === "running") ?? null;
+      const scannerSession = await remote.startSession();
+      setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
+      return activeBeforeStart?.id === scannerSession.id
+        ? `Scanner Session #${scannerSession.id} is already running; showing its persisted progress.`
+        : `Scanner Session #${scannerSession.id} started for ${scannerSession.trading_date}.`;
+    } finally {
+      setAction(null);
+    }
   }, [remote, sessions]);
 
   const importSample = useCallback(
     async (refresh: () => Promise<void>) => {
-      await remote.importSampleCandidates();
-      await refresh();
-      return "Sample scanner data imported.";
+      setAction("import");
+      try {
+        await remote.importSampleCandidates();
+        await refresh();
+        return "Sample scanner data imported.";
+      } finally {
+        setAction(null);
+      }
     },
     [remote],
   );
 
   const importCsv = useCallback(
     async (file: File, refresh: () => Promise<void>) => {
-      await remote.importCandidatesCsv(file);
-      await refresh();
-      return `${file.name} imported into the scanner.`;
+      setAction("csv-import");
+      try {
+        await remote.importCandidatesCsv(file);
+        await refresh();
+        return `${file.name} imported into the scanner.`;
+      } finally {
+        setAction(null);
+      }
     },
     [remote],
   );
@@ -167,9 +183,14 @@ export function useScannerWorkspace(
       status: ScannerSymbol["status"],
       refresh: () => Promise<void>,
     ) => {
-      await remote.updateCandidateStatus(ticker, status);
-      await refresh();
-      return status === "watch" ? `${ticker} saved to watchlist.` : `${ticker} marked ${status}.`;
+      setAction(`${ticker}-${status}`);
+      try {
+        await remote.updateCandidateStatus(ticker, status);
+        await refresh();
+        return status === "watch" ? `${ticker} saved to watchlist.` : `${ticker} marked ${status}.`;
+      } finally {
+        setAction(null);
+      }
     },
     [remote],
   );
@@ -185,6 +206,7 @@ export function useScannerWorkspace(
     setSearch,
     filter,
     setFilter,
+    action,
     load,
     selectCandidate,
     startSession,
@@ -199,7 +221,6 @@ export type ScannerWorkspaceController = ReturnType<typeof useScannerWorkspace>;
 export function ScannerWorkspace({
   workspace,
   loading,
-  saving,
   watchedTickers,
   maxSpreadPct,
   onRun,
@@ -210,7 +231,6 @@ export function ScannerWorkspace({
 }: {
   workspace: ScannerWorkspaceController;
   loading: boolean;
-  saving: string | null;
   watchedTickers: Set<string>;
   maxSpreadPct: number;
   onRun: () => Promise<void>;
@@ -229,7 +249,7 @@ export function ScannerWorkspace({
         />
         <ScannerSessionPanel
           scannerSession={workspace.displayedSession}
-          starting={saving === "scanner-session"}
+          starting={workspace.action === "scanner-session"}
           onRun={onRun}
         />
         <ScannerToolbar
@@ -244,7 +264,7 @@ export function ScannerWorkspace({
           loading={loading}
           selectedTicker={workspace.selectedTicker}
           watchedTickers={watchedTickers}
-          saving={saving}
+          saving={workspace.action}
           maxSpreadPct={maxSpreadPct}
           onSelect={onSelect}
           onToggleWatch={onToggleWatch}
