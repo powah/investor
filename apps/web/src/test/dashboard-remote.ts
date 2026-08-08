@@ -1,14 +1,11 @@
-import type {
-  AnalyticsRemote,
-  CandidateResearchRemote,
-  JournalRemote,
-  OperationsRemote,
-  PlannerRemote,
-  RiskRulesRemote,
-  ScannerRemote,
-  TradingDashboardRemote,
-  WatchlistRemote,
-} from "@/modules/trading-dashboard/remote";
+import type { AnalyticsRemote } from "@/modules/trading-dashboard/analytics/analytics-workspace";
+import type { CandidateResearchRemote } from "@/modules/trading-dashboard/candidate-research/candidate-research";
+import type { JournalRemote } from "@/modules/trading-dashboard/journal/journal-workspace";
+import type { OperationsRemote } from "@/modules/trading-dashboard/operations-workspace";
+import type { PlannerRemote } from "@/modules/trading-dashboard/planner/planner-workspace";
+import type { RiskRulesRemote } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
+import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
+import type { WatchlistRemote } from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
 import { buildCandidate, buildRiskSettings, buildRiskState } from "@/test/fixtures";
 import type {
   Analytics,
@@ -118,7 +115,7 @@ const tradePlan: TradePlan = {
   created_at: "2026-08-03T12:00:00Z",
 };
 
-export class InMemoryDashboardRemote implements TradingDashboardRemote {
+export class InMemoryDashboardRemote {
   readonly requestedOperations: string[] = [];
 
   private result<T>(operation: string, value: T): Promise<T> {

@@ -1,8 +1,16 @@
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardList, Eye, Plus, Save, ShieldCheck } from "lucide-react";
 import { currency, number } from "@/lib/api";
-import type { CatalystDraft } from "@/modules/trading-dashboard/contracts";
 import type { Catalyst, ScannerSymbol } from "@/types/trading";
+
+export type CatalystDraft = {
+  ticker: string;
+  published_time: string;
+  source: string;
+  headline: string;
+  catalyst_type: string;
+  quality_score: string;
+};
 
 export type CandidateResearchRemote = {
   listCatalysts(): Promise<Catalyst[]>;
@@ -25,6 +33,7 @@ export function useCandidateResearch(remote: CandidateResearchRemote, selectedTi
     catalyst_type: "FDA",
     quality_score: "20",
   });
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     const values = await remote.listCatalysts();
@@ -48,15 +57,20 @@ export function useCandidateResearch(remote: CandidateResearchRemote, selectedTi
 
   const saveReview = useCallback(
     async (refresh: () => Promise<void>) => {
-      await remote.createCatalystReview(draft);
-      await refresh();
-      setDraft((current) => ({ ...current, published_time: datetimeLocalNow(), headline: "" }));
-      return "Catalyst saved.";
+      setSaving(true);
+      try {
+        await remote.createCatalystReview(draft);
+        await refresh();
+        setDraft((current) => ({ ...current, published_time: datetimeLocalNow(), headline: "" }));
+        return "Catalyst saved.";
+      } finally {
+        setSaving(false);
+      }
     },
     [draft, remote],
   );
 
-  return { catalysts, selectedCatalysts, draft, setDraft, load, selectCandidate, saveReview };
+  return { catalysts, selectedCatalysts, draft, setDraft, saving, load, selectCandidate, saveReview };
 }
 
 export type CandidateResearchController = ReturnType<typeof useCandidateResearch>;
@@ -92,7 +106,7 @@ export function CandidateResearchPanel({
         draft={research.draft}
         setDraft={research.setDraft}
         onSubmit={onSubmit}
-        saving={saving === "catalyst"}
+        saving={research.saving}
       />
     </aside>
   );

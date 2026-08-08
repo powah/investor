@@ -1,3 +1,3 @@
 "use client";
 
-export { LegacyTradingDashboard as TradingDashboard } from "@/components/trading-dashboard";
+export { TradingDashboard } from "./trading-dashboard";

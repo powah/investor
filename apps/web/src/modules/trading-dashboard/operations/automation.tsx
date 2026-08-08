@@ -1,8 +1,17 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { CircleStop, LockKeyhole, Play, Power, Save, ShieldCheck, SlidersHorizontal, Unplug } from "lucide-react";
-import type { AutomationDraft } from "@/modules/trading-dashboard/contracts";
 import { apiMessage, Field } from "@/modules/trading-dashboard/operations/shared";
 import type { AutomationRun, AutomationSettings, ProviderConnectionStatus } from "@/types/trading";
+
+export type AutomationDraft = {
+  enabled: boolean;
+  auto_submit_approved: boolean;
+  require_manual_approval: boolean;
+  max_orders_per_day: string;
+  max_order_notional: string;
+  max_quote_age_seconds: string;
+  max_price_deviation_pct: string;
+};
 
 export type AutomationRemote = {
   getAutomationSettings(): Promise<AutomationSettings>;

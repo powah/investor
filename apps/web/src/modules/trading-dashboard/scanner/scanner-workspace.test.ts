@@ -29,7 +29,7 @@ function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
   };
 }
 
-function buildWorkspace(candidate: ScannerSymbol): ScannerWorkspaceController {
+function buildWorkspace(candidate: ScannerSymbol, action: string | null = null): ScannerWorkspaceController {
   return {
     candidates: [candidate],
     sessions: [],
@@ -41,6 +41,7 @@ function buildWorkspace(candidate: ScannerSymbol): ScannerWorkspaceController {
     setSearch: vi.fn(),
     filter: "all",
     setFilter: vi.fn(),
+    action,
     load: vi.fn(),
     selectCandidate: vi.fn(),
     startSession: vi.fn(),
@@ -115,7 +116,7 @@ describe("scanner workspace", () => {
   test("offers watch and ignore actions on mobile with desktop-equivalent saving guards", () => {
     const candidate = buildCandidate();
     const props = {
-      workspace: buildWorkspace(candidate),
+      workspace: buildWorkspace(candidate, "ALFA-candidate"),
       loading: false,
       watchedTickers: new Set<string>(),
       maxSpreadPct: 1.5,
@@ -125,16 +126,14 @@ describe("scanner workspace", () => {
       onIgnore: vi.fn(),
       candidateResearch: null,
     };
-    const { container, rerender } = render(
-      createElement(ScannerWorkspace, { ...props, saving: "ALFA-candidate" }),
-    );
+    const { container, rerender } = render(createElement(ScannerWorkspace, props));
     const mobileResults = container.querySelector(".md\\:hidden");
     expect(mobileResults).not.toBeNull();
     const mobile = within(mobileResults as HTMLElement);
 
     expect(mobile.getByRole("button", { name: "Add ALFA to watchlist" })).toBeDisabled();
 
-    rerender(createElement(ScannerWorkspace, { ...props, saving: "ALFA-ignore" }));
+    rerender(createElement(ScannerWorkspace, { ...props, workspace: buildWorkspace(candidate, "ALFA-ignore") }));
     expect(mobile.getByRole("button", { name: "Ignore ALFA" })).toBeDisabled();
   });
 
