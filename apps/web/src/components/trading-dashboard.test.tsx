@@ -113,7 +113,16 @@ describe("TradingDashboard", () => {
     await user.click(screen.getByRole("tab", { name: /Operations/ }));
     expect(screen.getByRole("heading", { name: "Operations" })).toBeVisible();
     await waitFor(() => {
-      expect(remote.requestedOperations.some((operation) => operation.startsWith("operations."))).toBe(true);
+      expect(remote.requestedOperations).toEqual(
+        expect.arrayContaining([
+          "operations.getIntegrationsStatus",
+          "operations.listMarketSnapshots",
+          "operations.listExternalEvents",
+          "operations.getAutomationSettings",
+          "operations.listExecutions",
+          "operations.getBrokerStream",
+        ]),
+      );
     });
     expect(await screen.findByText("Setup status")).toBeVisible();
   });
