@@ -1,4 +1,4 @@
-import { TradingDashboard } from "@/components/trading-dashboard";
+import { TradingDashboard } from "@/modules/trading-dashboard";
 
 export default function Home() {
   return <TradingDashboard />;

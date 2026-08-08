@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import { TradingDashboard } from "@/components/trading-dashboard";
+import { TradingDashboard } from "@/modules/trading-dashboard";
 import { InMemoryDashboardRemote } from "@/test/dashboard-remote";
 
 describe("TradingDashboard", () => {
@@ -48,12 +48,12 @@ describe("TradingDashboard", () => {
     render(<TradingDashboard remote={remote} />);
 
     await screen.findAllByRole("button", { name: "ALFA" });
-    expect(remote.requestedPaths.some((path) => path.startsWith("/integrations/"))).toBe(false);
+    expect(remote.requestedOperations.some((operation) => operation.startsWith("operations."))).toBe(false);
 
     await user.click(screen.getByRole("tab", { name: /Operations/ }));
     expect(screen.getByRole("heading", { name: "Operations" })).toBeVisible();
     await waitFor(() => {
-      expect(remote.requestedPaths.some((path) => path.startsWith("/integrations/"))).toBe(true);
+      expect(remote.requestedOperations.some((operation) => operation.startsWith("operations."))).toBe(true);
     });
     expect(await screen.findByText("Setup status")).toBeVisible();
   });

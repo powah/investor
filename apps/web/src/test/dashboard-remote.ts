@@ -1,4 +1,14 @@
-import type { RemoteSystem, RemoteRequestOptions } from "@/lib/remote-system";
+import type {
+  AnalyticsRemote,
+  CandidateResearchRemote,
+  JournalRemote,
+  OperationsRemote,
+  PlannerRemote,
+  RiskRulesRemote,
+  ScannerRemote,
+  TradingDashboardRemote,
+  WatchlistRemote,
+} from "@/modules/trading-dashboard/remote";
 import { buildCandidate, buildRiskSettings, buildRiskState } from "@/test/fixtures";
 import type {
   Analytics,
@@ -90,40 +100,86 @@ const brokerStream: BrokerStreamState = {
   updated_at: "2026-08-03T12:00:00Z",
 };
 
-export class InMemoryDashboardRemote implements RemoteSystem {
-  readonly requestedPaths: string[] = [];
+export class InMemoryDashboardRemote implements TradingDashboardRemote {
+  readonly requestedOperations: string[] = [];
 
-  private readonly responses: Record<string, unknown> = {
-    "/scanner": [alfa, beta],
-    "/scanner-sessions": [],
-    "/watchlist": [
-      {
-        id: 1,
-        ticker: "ALFA",
-        notes: "Wait for support to hold.",
-        created_at: "2026-08-03T12:00:00Z",
-        symbol: alfa,
-      } satisfies WatchlistItem,
-    ],
-    "/catalysts": [],
-    "/risk-settings": riskSettings,
-    "/risk-state": riskState,
-    "/trade-plans": [],
-    "/journal": [],
-    "/analytics": analytics,
-    "/integrations/status": integrationsStatus,
-    "/integrations/market-data/snapshots": [],
-    "/integrations/news-events": [],
-    "/integrations/automation/settings": automationSettings,
-    "/integrations/executions": [],
-    "/integrations/broker/stream": brokerStream,
+  private result<T>(operation: string, value: T): Promise<T> {
+    this.requestedOperations.push(operation);
+    return Promise.resolve(value);
+  }
+
+  private unsupported(operation: string): Promise<never> {
+    this.requestedOperations.push(operation);
+    return Promise.reject(new Error(`No in-memory behavior for ${operation}`));
+  }
+
+  readonly scanner: ScannerRemote = {
+    listCandidates: () => this.result("scanner.listCandidates", [alfa, beta]),
+    listSessions: () => this.result("scanner.listSessions", []),
+    getSession: () => this.unsupported("scanner.getSession"),
+    importSampleCandidates: () => this.unsupported("scanner.importSampleCandidates"),
+    startSession: () => this.unsupported("scanner.startSession"),
+    importCandidatesCsv: () => this.unsupported("scanner.importCandidatesCsv"),
+    updateCandidateStatus: () => this.unsupported("scanner.updateCandidateStatus"),
   };
 
-  request = async <T>(path: string, _options: RemoteRequestOptions = {}): Promise<T> => {
-    this.requestedPaths.push(path);
-    if (!(path in this.responses)) {
-      throw new Error(`No in-memory response for ${path}`);
-    }
-    return this.responses[path] as T;
+  readonly candidateResearch: CandidateResearchRemote = {
+    listCatalysts: () => this.result("candidateResearch.listCatalysts", []),
+    createCatalystReview: () => this.unsupported("candidateResearch.createCatalystReview"),
+  };
+
+  readonly watchlist: WatchlistRemote = {
+    listItems: () =>
+      this.result("watchlist.listItems", [
+        {
+          id: 1,
+          ticker: "ALFA",
+          notes: "Wait for support to hold.",
+          created_at: "2026-08-03T12:00:00Z",
+          symbol: alfa,
+        } satisfies WatchlistItem,
+      ]),
+    removeItem: () => this.unsupported("watchlist.removeItem"),
+    saveNotes: () => this.unsupported("watchlist.saveNotes"),
+  };
+
+  readonly riskRules: RiskRulesRemote = {
+    getSettings: () => this.result("riskRules.getSettings", riskSettings),
+    getState: () => this.result("riskRules.getState", riskState),
+    updateSettings: () => this.unsupported("riskRules.updateSettings"),
+  };
+
+  readonly planner: PlannerRemote = {
+    listPlans: () => this.result("planner.listPlans", []),
+    createPlan: () => this.unsupported("planner.createPlan"),
+  };
+
+  readonly journal: JournalRemote = {
+    listEntries: () => this.result("journal.listEntries", []),
+    createEntry: () => this.unsupported("journal.createEntry"),
+  };
+
+  readonly analytics: AnalyticsRemote = {
+    getSummary: () => this.result("analytics.getSummary", analytics),
+  };
+
+  readonly operations: OperationsRemote = {
+    getIntegrationsStatus: () => this.result("operations.getIntegrationsStatus", integrationsStatus),
+    listMarketSnapshots: () => this.result("operations.listMarketSnapshots", []),
+    listExternalEvents: () => this.result("operations.listExternalEvents", []),
+    getAutomationSettings: () => this.result("operations.getAutomationSettings", automationSettings),
+    listExecutions: () => this.result("operations.listExecutions", []),
+    getBrokerStream: () => this.result("operations.getBrokerStream", brokerStream),
+    syncMarketData: () => this.unsupported("operations.syncMarketData"),
+    probeCapabilities: () => this.unsupported("operations.probeCapabilities"),
+    syncNews: () => this.unsupported("operations.syncNews"),
+    promoteExternalEvent: () => this.unsupported("operations.promoteExternalEvent"),
+    updateAutomationSettings: () => this.unsupported("operations.updateAutomationSettings"),
+    updateKillSwitch: () => this.unsupported("operations.updateKillSwitch"),
+    syncBroker: () => this.unsupported("operations.syncBroker"),
+    prepareExecution: () => this.unsupported("operations.prepareExecution"),
+    approveExecution: () => this.unsupported("operations.approveExecution"),
+    submitExecution: () => this.unsupported("operations.submitExecution"),
+    runAutomation: () => this.unsupported("operations.runAutomation"),
   };
 }

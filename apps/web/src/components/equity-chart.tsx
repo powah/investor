@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useMemo, useRef } from "react";
 import { createChart, LineSeries, type IChartApi, type UTCTimestamp } from "lightweight-charts";
 import type { JournalEntry } from "@/types/trading";
