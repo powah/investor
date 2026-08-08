@@ -4,6 +4,7 @@ import type { JournalRemote } from "@/modules/trading-dashboard/journal/journal-
 import type { PlannerRemote } from "@/modules/trading-dashboard/planner/planner-workspace";
 import type { RiskRulesRemote } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
 import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
+import type { WatchlistRemote } from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
 import type {
   AutomationRun,
   AutomationSettings,
@@ -16,20 +17,13 @@ import type {
   IntegrationSyncResult,
   MarketDataSnapshot,
   TradePlan,
-  WatchlistItem,
 } from "@/types/trading";
 import type {
   AutomationDraft,
   PromotionDraft,
 } from "./contracts";
 
-export type { AnalyticsRemote, CandidateResearchRemote, JournalRemote, PlannerRemote, RiskRulesRemote, ScannerRemote };
-
-export type WatchlistRemote = {
-  listItems(): Promise<WatchlistItem[]>;
-  removeItem(ticker: string): Promise<void>;
-  saveNotes(ticker: string, notes: string): Promise<WatchlistItem>;
-};
+export type { AnalyticsRemote, CandidateResearchRemote, JournalRemote, PlannerRemote, RiskRulesRemote, ScannerRemote, WatchlistRemote };
 
 export type OperationsRemote = {
   getIntegrationsStatus(): Promise<IntegrationsStatus>;
