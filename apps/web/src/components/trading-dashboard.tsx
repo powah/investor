@@ -23,15 +23,19 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { EquityChart } from "@/components/equity-chart";
-import { ApiError, currency, number, todayIsoDate } from "@/lib/api";
+import { ApiError, currency, number } from "@/lib/api";
+import {
+  AnalyticsSummaryPanel,
+  AnalyticsWorkspace,
+  useAnalyticsWorkspace,
+} from "@/modules/trading-dashboard/analytics/analytics-workspace";
 import {
   CandidateDetailPanel,
   CandidateResearchPanel,
   useCandidateResearch,
 } from "@/modules/trading-dashboard/candidate-research/candidate-research";
-import type { JournalDraft } from "@/modules/trading-dashboard/contracts";
 import { httpTradingDashboardRemote } from "@/modules/trading-dashboard/http-remote";
+import { JournalWorkspace, useJournalWorkspace } from "@/modules/trading-dashboard/journal/journal-workspace";
 import { OperationsWorkspace } from "@/modules/trading-dashboard/operations-workspace";
 import { PlannerWorkspace, usePlannerWorkspace } from "@/modules/trading-dashboard/planner/planner-workspace";
 import type { TradingDashboardRemote } from "@/modules/trading-dashboard/remote";
@@ -44,27 +48,9 @@ import {
   ScannerWorkspace,
   useScannerWorkspace,
 } from "@/modules/trading-dashboard/scanner/scanner-workspace";
-import type {
-  Analytics,
-  JournalEntry,
-  RiskSettings,
-  ScannerSymbol,
-  TradePlan,
-  WatchlistItem,
-} from "@/types/trading";
+import type { RiskSettings, ScannerSymbol, TradePlan, WatchlistItem } from "@/types/trading";
 
 type WorkspaceView = "scanner" | "watchlist" | "planner" | "journal" | "analytics" | "operations" | "settings";
-
-const emptyAnalytics: Analytics = {
-  total_trades: 0,
-  win_rate: 0,
-  average_win: 0,
-  average_loss: 0,
-  net_pnl: 0,
-  average_r: 0,
-  best_catalyst_type: null,
-  most_common_mistake: null,
-};
 
 function apiMessage(error: unknown) {
   if (error instanceof ApiError) {
@@ -147,8 +133,6 @@ export function LegacyTradingDashboard(
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [journal, setJournal] = useState<JournalEntry[]>([]);
-  const [analytics, setAnalytics] = useState<Analytics>(emptyAnalytics);
   const [watchNotes, setWatchNotes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -156,22 +140,11 @@ export function LegacyTradingDashboard(
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [journalDraft, setJournalDraft] = useState<JournalDraft>({
-    trade_date: todayIsoDate(),
-    ticker: "",
-    setup: "Catalyst momentum",
-    catalyst_type: "",
-    entry_price: "",
-    stop_price: "",
-    exit_price: "",
-    shares: "",
-    pnl: "",
-    notes: "",
-    mistake_tags: "",
-    followed_plan: true,
-  });
-
   const watchedTickers = useMemo(() => new Set(watchlist.map((item) => item.ticker)), [watchlist]);
+  const journalWorkspace = useJournalWorkspace(remote.journal);
+  const analyticsWorkspace = useAnalyticsWorkspace(remote.analytics);
+  const journal = journalWorkspace.entries;
+  const analytics = analyticsWorkspace.summary;
   const riskRules = useRiskRules(remote.riskRules);
   const settings = riskRules.settings;
   const riskState = riskRules.state;
@@ -199,20 +172,18 @@ export function LegacyTradingDashboard(
 
   async function loadAll() {
     setError(null);
-    const [scannerData, , watchlistData, riskData, , journalData, analyticsData] =
+    const [scannerData, , watchlistData, riskData] =
       await Promise.all([
         scannerWorkspace.load(),
         candidateResearch.load(),
         remote.watchlist.listItems(),
         riskRules.load(),
         planner.load(),
-        remote.journal.listEntries(),
-        remote.analytics.getSummary(),
+        journalWorkspace.load(),
+        analyticsWorkspace.load(),
       ]);
 
     setWatchlist(watchlistData);
-    setJournal(journalData);
-    setAnalytics(analyticsData);
     setWatchNotes((current) => {
       const next = { ...current };
       watchlistData.forEach((item) => {
@@ -239,14 +210,7 @@ export function LegacyTradingDashboard(
     scannerWorkspace.selectCandidate(symbol);
     candidateResearch.selectCandidate(symbol);
     planner.selectCandidate(symbol, riskSettings);
-    setJournalDraft((current) => ({
-      ...current,
-      ticker: symbol.ticker,
-      catalyst_type: symbol.catalyst_type || "",
-      entry_price: current.ticker === symbol.ticker ? current.entry_price : "",
-      stop_price: current.ticker === symbol.ticker ? current.stop_price : "",
-      exit_price: current.ticker === symbol.ticker ? current.exit_price : "",
-    }));
+    journalWorkspace.selectCandidate(symbol);
   }
 
   async function refreshWithNotice(message: string) {
@@ -373,20 +337,7 @@ export function LegacyTradingDashboard(
     if (symbol) {
       scannerWorkspace.selectCandidate(symbol);
     }
-    setJournalDraft((current) => ({
-      ...current,
-      trade_date: todayIsoDate(),
-      ticker: plan.ticker,
-      catalyst_type: symbol?.catalyst_type ?? current.catalyst_type,
-      entry_price: String(plan.entry_price),
-      stop_price: String(plan.stop_price),
-      exit_price: "",
-      shares: String(plan.shares),
-      pnl: "",
-      notes: "",
-      mistake_tags: "",
-      followed_plan: true,
-    }));
+    journalWorkspace.startFromPlan(plan, symbol);
     setActiveView("journal");
     setNotice(`${plan.ticker} plan loaded into the journal. Add the actual exit and review execution.`);
   }
@@ -429,23 +380,11 @@ export function LegacyTradingDashboard(
 
   async function saveJournal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving("journal");
     setError(null);
     try {
-      await remote.journal.createEntry(journalDraft);
-      await refreshWithNotice("Journal entry saved.");
-      setJournalDraft((current) => ({
-        ...current,
-        exit_price: "",
-        shares: "",
-        pnl: "",
-        notes: "",
-        mistake_tags: "",
-      }));
+      setNotice(await journalWorkspace.save(loadAll));
     } catch (journalError) {
       setError(apiMessage(journalError));
-    } finally {
-      setSaving(null);
     }
   }
 
@@ -638,46 +577,18 @@ export function LegacyTradingDashboard(
           )}
 
           {activeView === "journal" && (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-              <div className="min-w-0 space-y-4">
-                <PageHeading
-                  eyebrow="Step 4 · Review"
-                  title="Trade journal"
-                  description="Record the actual execution, whether the plan was followed, and the mistake tags that matter."
-                />
-                <JournalPanel
-                  draft={journalDraft}
-                  setDraft={setJournalDraft}
-                  onSubmit={saveJournal}
-                  saving={saving === "journal"}
-                  entries={journal}
-                />
-              </div>
-              <aside className="space-y-4">
-                <AnalyticsPanel analytics={analytics} journal={journal} />
-                <RiskStatePanel state={riskState} settings={settings} />
-              </aside>
-            </div>
+            <JournalWorkspace
+              journal={journalWorkspace}
+              onSubmit={saveJournal}
+              analyticsPresentation={
+                <AnalyticsSummaryPanel analytics={analytics} journal={journal} />
+              }
+              riskPresentation={<RiskStatePanel state={riskState} settings={settings} />}
+            />
           )}
 
           {activeView === "analytics" && (
-            <div className="space-y-4">
-              <PageHeading
-                eyebrow="Feedback loop"
-                title="Performance analytics"
-                description="Use outcomes and process mistakes to improve the playbook—not to turn a small sample into a prediction."
-              />
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <Metric label="Completed trades" value={analytics.total_trades.toString()} />
-                <Metric label="Win rate" value={`${number(analytics.win_rate, 1)}%`} />
-                <Metric label="Average R" value={`${number(analytics.average_r, 2)}R`} tone={analytics.average_r >= 0 ? "good" : "bad"} />
-                <Metric label="Plan adherence" value={journal.length ? `${number((journal.filter((entry) => entry.followed_plan).length / journal.length) * 100, 0)}%` : "—"} />
-              </div>
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-                <AnalyticsPanel analytics={analytics} journal={journal} />
-                <ProcessReviewPanel analytics={analytics} journal={journal} />
-              </div>
-            </div>
+            <AnalyticsWorkspace analytics={analyticsWorkspace} entries={journal} />
           )}
 
           {activeView === "operations" && (
@@ -701,6 +612,16 @@ function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: 
         <h2 className="mt-1 text-2xl font-semibold tracking-tight text-ink">{title}</h2>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
       </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "bad" }) {
+  const toneClass = tone === "good" ? "text-teal-700" : tone === "bad" ? "text-red-700" : "text-ink";
+  return (
+    <div className="panel rounded-xl px-4 py-3">
+      <div className="label">{label}</div>
+      <div className={`mt-1 text-xl font-semibold ${toneClass}`}>{value}</div>
     </div>
   );
 }
@@ -751,46 +672,6 @@ function WatchNotesPanel({
   );
 }
 
-function ProcessReviewPanel({ analytics, journal }: { analytics: Analytics; journal: JournalEntry[] }) {
-  const unplanned = journal.filter((entry) => !entry.followed_plan).length;
-  return (
-    <section className="panel rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <ClipboardList className="h-4 w-4 text-blue-700" aria-hidden="true" />
-        <h3 className="font-semibold text-ink">Process review</h3>
-      </div>
-      <div className="divide-y divide-line">
-        <ReviewRow label="Best catalyst so far" value={analytics.best_catalyst_type ?? "Not enough data"} />
-        <ReviewRow label="Most common mistake" value={analytics.most_common_mistake ?? "None recorded"} />
-        <ReviewRow label="Trades outside plan" value={unplanned.toString()} tone={unplanned > 0 ? "bad" : "neutral"} />
-        <ReviewRow label="Average win / loss" value={`${currency(analytics.average_win)} / ${currency(analytics.average_loss)}`} />
-      </div>
-      <p className="border-t border-line bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
-        Treat small samples as feedback, not prediction. Improve the checklist before changing the scoring model.
-      </p>
-    </section>
-  );
-}
-
-function ReviewRow({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "bad" }) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className={`text-right font-semibold ${tone === "bad" ? "text-red-700" : "text-ink"}`}>{value}</span>
-    </div>
-  );
-}
-
-function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "bad" }) {
-  const toneClass = tone === "good" ? "text-teal-700" : tone === "bad" ? "text-red-700" : "text-ink";
-  return (
-    <div className="panel rounded-xl px-4 py-3">
-      <div className="label">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold ${toneClass}`}>{value}</div>
-    </div>
-  );
-}
-
 function TableHead({ children }: { children: React.ReactNode }) {
   return <th className="px-3 py-3 font-semibold">{children}</th>;
 }
@@ -801,162 +682,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="label mb-1 block">{label}</span>
       {children}
     </label>
-  );
-}
-
-function JournalPanel({
-  draft,
-  setDraft,
-  onSubmit,
-  saving,
-  entries,
-}: {
-  draft: JournalDraft;
-  setDraft: React.Dispatch<React.SetStateAction<JournalDraft>>;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  saving: boolean;
-  entries: JournalEntry[];
-}) {
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <BookOpen className="h-4 w-4 text-blue-700" />
-        <h2 className="text-base font-semibold text-ink">Journal</h2>
-      </div>
-      <form className="grid gap-3 px-4 py-4 sm:grid-cols-2" onSubmit={onSubmit}>
-        <Field label="Date">
-          <input
-            className="field"
-            type="date"
-            value={draft.trade_date}
-            onChange={(event) => setDraft((current) => ({ ...current, trade_date: event.target.value }))}
-          />
-        </Field>
-        <Field label="Ticker">
-          <input
-            className="field uppercase"
-            value={draft.ticker}
-            required
-            onChange={(event) => setDraft((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))}
-          />
-        </Field>
-        <Field label="Setup">
-          <input
-            className="field"
-            value={draft.setup}
-            onChange={(event) => setDraft((current) => ({ ...current, setup: event.target.value }))}
-          />
-        </Field>
-        <Field label="Catalyst">
-          <input
-            className="field"
-            value={draft.catalyst_type}
-            onChange={(event) => setDraft((current) => ({ ...current, catalyst_type: event.target.value }))}
-          />
-        </Field>
-        <Field label="Entry">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            value={draft.entry_price}
-            onChange={(event) => setDraft((current) => ({ ...current, entry_price: event.target.value }))}
-          />
-        </Field>
-        <Field label="Stop">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            value={draft.stop_price}
-            onChange={(event) => setDraft((current) => ({ ...current, stop_price: event.target.value }))}
-          />
-        </Field>
-        <Field label="Exit">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            value={draft.exit_price}
-            onChange={(event) => setDraft((current) => ({ ...current, exit_price: event.target.value }))}
-          />
-        </Field>
-        <Field label="Shares">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="1"
-            required
-            value={draft.shares}
-            onChange={(event) => setDraft((current) => ({ ...current, shares: event.target.value }))}
-          />
-        </Field>
-        <Field label="P&L override">
-          <input
-            className="field"
-            type="number"
-            step="0.01"
-            value={draft.pnl}
-            onChange={(event) => setDraft((current) => ({ ...current, pnl: event.target.value }))}
-          />
-        </Field>
-        <Field label="Mistake tags">
-          <input
-            className="field"
-            value={draft.mistake_tags}
-            onChange={(event) => setDraft((current) => ({ ...current, mistake_tags: event.target.value }))}
-          />
-        </Field>
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <input
-            type="checkbox"
-            checked={draft.followed_plan}
-            onChange={(event) => setDraft((current) => ({ ...current, followed_plan: event.target.checked }))}
-          />
-          Followed plan
-        </label>
-        <div className="flex items-end">
-          <button className="primary-button w-full" type="submit" disabled={saving}>
-            <Plus className="h-4 w-4" />
-            Add entry
-          </button>
-        </div>
-        <div className="sm:col-span-2">
-          <Field label="Notes">
-            <textarea
-              className="field min-h-20"
-              value={draft.notes}
-              onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
-            />
-          </Field>
-        </div>
-      </form>
-      <div className="max-h-[360px] overflow-y-auto border-t border-line">
-        {entries.slice(0, 8).map((entry) => (
-          <div key={entry.id} className="grid gap-1 border-b border-line px-4 py-3 text-sm last:border-b-0">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-semibold text-ink">
-                {entry.trade_date} {entry.ticker}
-              </span>
-              <span className={entry.pnl >= 0 ? "font-semibold text-teal-700" : "font-semibold text-red-700"}>
-                {currency(entry.pnl)} / {number(entry.r_multiple, 2)}R
-              </span>
-            </div>
-            <div className="text-slate-500">
-              {entry.setup} {entry.followed_plan ? "" : "/ rule break"}
-            </div>
-          </div>
-        ))}
-        {entries.length === 0 && <div className="px-4 py-4 text-sm text-slate-500">No journal entries saved.</div>}
-      </div>
-    </section>
   );
 }
 
@@ -1028,34 +753,5 @@ function WatchlistPanel({
         )}
       </div>
     </section>
-  );
-}
-
-function AnalyticsPanel({ analytics, journal }: { analytics: Analytics; journal: JournalEntry[] }) {
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 px-4 py-3">
-        <BarChart3 className="h-4 w-4 text-blue-700" />
-        <h2 className="text-base font-semibold text-ink">Analytics</h2>
-      </div>
-      <div className="grid grid-cols-2 gap-3 border-t border-line px-4 py-4 text-sm">
-        <Stat label="Trades" value={analytics.total_trades.toString()} />
-        <Stat label="Avg R" value={`${number(analytics.average_r, 2)}R`} />
-        <Stat label="Avg win" value={currency(analytics.average_win)} />
-        <Stat label="Avg loss" value={currency(analytics.average_loss)} />
-        <Stat label="Best catalyst" value={analytics.best_catalyst_type ?? "-"} />
-        <Stat label="Top mistake" value={analytics.most_common_mistake ?? "-"} />
-      </div>
-      <EquityChart entries={journal} />
-    </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="label">{label}</div>
-      <div className="mt-1 break-words font-semibold text-ink">{value}</div>
-    </div>
   );
 }

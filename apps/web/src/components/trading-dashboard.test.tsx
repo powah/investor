@@ -72,6 +72,13 @@ describe("TradingDashboard", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "ALFA plan loaded into the journal. Add the actual exit and review execution.",
     );
+
+    await user.type(screen.getByLabelText("Exit"), "11.25");
+    await user.click(screen.getByRole("tab", { name: /Analytics/ }));
+    expect(screen.getByRole("heading", { name: "Performance analytics" })).toBeVisible();
+    expect(screen.getByText("Completed trades").nextSibling).toHaveTextContent("0");
+    await user.click(screen.getByRole("tab", { name: /Journal/ }));
+    expect(screen.getByLabelText("Exit")).toHaveValue(11.25);
   });
 
   test("does not begin Operations remote work until the operator opens Operations", async () => {
