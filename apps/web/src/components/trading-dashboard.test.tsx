@@ -42,6 +42,22 @@ describe("TradingDashboard", () => {
     );
   });
 
+  test("preserves an unfinished Risk Rules draft across workspace navigation", async () => {
+    const user = userEvent.setup();
+    render(<TradingDashboard remote={new InMemoryDashboardRemote()} />);
+
+    await screen.findAllByRole("button", { name: "ALFA" });
+    await user.click(screen.getByRole("tab", { name: /Risk rules/ }));
+    const accountSize = screen.getByLabelText("Account size");
+    await user.clear(accountSize);
+    await user.type(accountSize, "30000");
+
+    await user.click(screen.getByRole("tab", { name: /Scanner/ }));
+    await user.click(screen.getByRole("tab", { name: /Risk rules/ }));
+
+    expect(screen.getByLabelText("Account size")).toHaveValue(30000);
+  });
+
   test("does not begin Operations remote work until the operator opens Operations", async () => {
     const user = userEvent.setup();
     const remote = new InMemoryDashboardRemote();

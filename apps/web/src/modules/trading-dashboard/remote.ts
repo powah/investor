@@ -1,4 +1,5 @@
 import type { PlanDraft } from "@/lib/plan-preview";
+import type { RiskRulesRemote } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
 import type {
   Analytics,
   AutomationRun,
@@ -13,8 +14,6 @@ import type {
   IntegrationSyncResult,
   JournalEntry,
   MarketDataSnapshot,
-  RiskSettings,
-  RiskState,
   ScannerSession,
   ScannerSymbol,
   TradePlan,
@@ -25,8 +24,9 @@ import type {
   CatalystDraft,
   JournalDraft,
   PromotionDraft,
-  RiskDraft,
 } from "./contracts";
+
+export type { RiskRulesRemote };
 
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
@@ -47,12 +47,6 @@ export type WatchlistRemote = {
   listItems(): Promise<WatchlistItem[]>;
   removeItem(ticker: string): Promise<void>;
   saveNotes(ticker: string, notes: string): Promise<WatchlistItem>;
-};
-
-export type RiskRulesRemote = {
-  getSettings(): Promise<RiskSettings>;
-  getState(): Promise<RiskState>;
-  updateSettings(draft: RiskDraft): Promise<RiskSettings>;
 };
 
 export type PlannerRemote = {
