@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, ShieldCheck } from "lucide-react";
-import { currency, number } from "@/lib/api";
+import { currency } from "@/lib/api";
 import type { RiskSettings, RiskState } from "@/types/trading";
 
 export function RiskPrinciplesPanel() {
