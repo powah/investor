@@ -87,8 +87,13 @@ export function useScannerWorkspace(
     }
     const scannerSessionId = activeSessionId;
     let cancelled = false;
+    let refreshPending = false;
 
     async function refreshScannerSession() {
+      if (refreshPending) {
+        return;
+      }
+      refreshPending = true;
       try {
         const updated = await remote.getSession(scannerSessionId);
         if (!cancelled) {
@@ -96,6 +101,8 @@ export function useScannerWorkspace(
         }
       } catch {
         // Keep the last persisted progress visible; the normal workspace refresh reports connectivity errors.
+      } finally {
+        refreshPending = false;
       }
     }
 
@@ -590,15 +597,27 @@ function ScannerTable({
                   </div>
                   <div className="mt-1 text-sm text-slate-600">{currency(symbol.price)} · +{number(symbol.gap_pct, 1)}% · {number(symbol.rel_volume, 1)}× RVOL</div>
                 </button>
-                <button
-                  className={watched ? "secondary-active-button" : "icon-button"}
-                  type="button"
-                  aria-label={watched ? `Remove ${symbol.ticker} from watchlist` : `Add ${symbol.ticker} to watchlist`}
-                  aria-pressed={watched}
-                  onClick={() => void onToggleWatch(symbol)}
-                >
-                  <Eye className="h-4 w-4" aria-hidden="true" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    className={watched ? "secondary-active-button" : "icon-button"}
+                    type="button"
+                    aria-label={watched ? `Remove ${symbol.ticker} from watchlist` : `Add ${symbol.ticker} to watchlist`}
+                    aria-pressed={watched}
+                    disabled={saving === `${symbol.ticker}-watch` || saving === `${symbol.ticker}-candidate`}
+                    onClick={() => void onToggleWatch(symbol)}
+                  >
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label={`Ignore ${symbol.ticker}`}
+                    disabled={saving === `${symbol.ticker}-ignore`}
+                    onClick={() => void onIgnore(symbol)}
+                  >
+                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
               <div className="mt-3 text-sm font-medium text-ink">{symbol.catalyst_type || "No catalyst category"}</div>
               <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-500">{symbol.news_headline || "No fresh catalyst recorded"}</p>

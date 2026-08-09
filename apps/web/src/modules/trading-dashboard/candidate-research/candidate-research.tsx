@@ -50,7 +50,7 @@ export function useCandidateResearch(remote: CandidateResearchRemote, selectedTi
     async (refresh: () => Promise<void>) => {
       await remote.createCatalystReview(draft);
       await refresh();
-      setDraft((current) => ({ ...current, headline: "" }));
+      setDraft((current) => ({ ...current, published_time: datetimeLocalNow(), headline: "" }));
       return "Catalyst saved.";
     },
     [draft, remote],
@@ -293,6 +293,7 @@ function CatalystPanel({
             <input
               className="field"
               type="datetime-local"
+              required
               value={draft.published_time}
               onChange={(event) => setDraft((current) => ({ ...current, published_time: event.target.value }))}
             />
@@ -339,6 +340,7 @@ function CatalystPanel({
               min="0"
               max="20"
               step="1"
+              required
               value={draft.quality_score}
               onChange={(event) => setDraft((current) => ({ ...current, quality_score: event.target.value }))}
             />
