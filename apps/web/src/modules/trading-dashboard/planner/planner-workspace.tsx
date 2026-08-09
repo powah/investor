@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlertTriangle, ArrowRight, BookOpen, Calculator, CheckCircle2, ClipboardList, Save, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowRight, Calculator, CheckCircle2, Save, ShieldCheck } from "lucide-react";
 import { currency, number, todayIsoDate } from "@/lib/api";
 import { calculatePlanPreview, type PlanDraft, type PlanPreview } from "@/modules/trading-dashboard/planner/plan-preview";
 import type { RiskSettings, RiskState, ScannerSymbol, TradePlan } from "@/types/trading";

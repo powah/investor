@@ -705,15 +705,6 @@ function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: 
   );
 }
 
-function PreviewStat({ label, value, emphasize = false }: { label: string; value: string; emphasize?: boolean }) {
-  return (
-    <div className={`rounded-lg px-3 py-2 ${emphasize ? "bg-blue-50 ring-1 ring-blue-100" : "bg-slate-50"}`}>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`mt-1 ${emphasize ? "font-semibold text-blue-900" : "text-sm font-medium text-ink"}`}>{value}</div>
-    </div>
-  );
-}
-
 function WatchNotesPanel({
   ticker,
   value,
