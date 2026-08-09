@@ -58,6 +58,22 @@ describe("TradingDashboard", () => {
     expect(screen.getByLabelText("Account size")).toHaveValue(30000);
   });
 
+  test("starts a Journal draft from a saved Trade Plan", async () => {
+    const user = userEvent.setup();
+    render(<TradingDashboard remote={new InMemoryDashboardRemote()} />);
+
+    await screen.findAllByRole("button", { name: "ALFA" });
+    await user.click(screen.getByRole("tab", { name: /Trade planner/ }));
+    await user.click(screen.getByRole("button", { name: /Journal/ }));
+
+    expect(screen.getByRole("heading", { name: "Trade journal" })).toBeVisible();
+    expect(screen.getByLabelText("Ticker")).toHaveValue("ALFA");
+    expect(screen.getByLabelText("Shares")).toHaveValue(500);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "ALFA plan loaded into the journal. Add the actual exit and review execution.",
+    );
+  });
+
   test("does not begin Operations remote work until the operator opens Operations", async () => {
     const user = userEvent.setup();
     const remote = new InMemoryDashboardRemote();

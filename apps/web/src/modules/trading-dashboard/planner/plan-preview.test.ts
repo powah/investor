@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { calculatePlanPreview, type PlanDraft } from "@/lib/plan-preview";
+import { calculatePlanPreview, type PlanDraft } from "@/modules/trading-dashboard/planner/plan-preview";
 import { buildCandidate, buildRiskSettings, buildRiskState } from "@/test/fixtures";
 
 const planningCandidate = buildCandidate();
@@ -30,6 +30,49 @@ describe("calculatePlanPreview", () => {
       shares: 500,
       maxLoss: 250,
       rMultiple: 3,
+    });
+  });
+
+  test("blocks a worked plan whose long-side stop is not below entry", () => {
+    expect(
+      calculatePlanPreview(
+        draft({ stop_price: "10.50" }),
+        planningCandidate,
+        riskSettings,
+        openRiskState,
+      ),
+    ).toEqual({
+      ready: true,
+      blockers: ["Stop must be below entry for this long momentum setup."],
+      warnings: [],
+      riskPerShare: 0,
+      cashRisk: 250,
+      shares: 0,
+      maxLoss: 0,
+      rMultiple: null,
+    });
+  });
+
+  test("warns from literal reward and scanner-membership inputs without blocking", () => {
+    expect(
+      calculatePlanPreview(
+        draft({ target_price: "10.25" }),
+        null,
+        riskSettings,
+        openRiskState,
+      ),
+    ).toEqual({
+      ready: true,
+      blockers: [],
+      warnings: [
+        "Target offers less than 1R of reward.",
+        "Ticker is not in the current scanner universe.",
+      ],
+      riskPerShare: 0.5,
+      cashRisk: 250,
+      shares: 500,
+      maxLoss: 250,
+      rMultiple: 0.5,
     });
   });
 
