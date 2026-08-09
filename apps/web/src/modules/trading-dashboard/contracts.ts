@@ -7,21 +7,6 @@ export type CatalystDraft = {
   quality_score: string;
 };
 
-export type JournalDraft = {
-  trade_date: string;
-  ticker: string;
-  setup: string;
-  catalyst_type: string;
-  entry_price: string;
-  stop_price: string;
-  exit_price: string;
-  shares: string;
-  pnl: string;
-  notes: string;
-  mistake_tags: string;
-  followed_plan: boolean;
-};
-
 export type AutomationDraft = {
   enabled: boolean;
   auto_submit_approved: boolean;
