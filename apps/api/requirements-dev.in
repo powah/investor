@@ -1,7 +1,7 @@
 -r requirements.in
 
-httpx2==2.9.1
+httpx2==2.10.0
 pip-audit==2.10.1
-pip==26.1.2
+pip==26.2.1
 pip-tools==7.6.0
 pytest==9.1.1
