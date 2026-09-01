@@ -4,27 +4,37 @@ import {
   AutomationCapability,
   PaperOnlyBoundary,
   useAutomationCapability,
+  type AutomationRemote,
 } from "@/modules/trading-dashboard/operations/automation";
 import {
   ConnectionStatusCapability,
   useConnectionStatusCapability,
+  type ConnectionStatusRemote,
 } from "@/modules/trading-dashboard/operations/connection-status";
 import {
   DataFeedCapability,
   useDataFeedCapability,
+  type DataFeedRemote,
 } from "@/modules/trading-dashboard/operations/data-feeds";
 import {
   EventReviewCapability,
   useEventReviewCapability,
+  type EventReviewRemote,
 } from "@/modules/trading-dashboard/operations/event-review";
 import {
   BrokerStreamCard,
   PaperExecutionCapability,
   usePaperExecutionCapability,
+  type PaperExecutionRemote,
 } from "@/modules/trading-dashboard/operations/paper-execution";
 import { apiMessage, PageHeading } from "@/modules/trading-dashboard/operations/shared";
-import type { OperationsRemote } from "@/modules/trading-dashboard/remote";
 import type { ExternalNewsEvent, ExecutionIntent, TradePlan } from "@/types/trading";
+
+export type OperationsRemote = ConnectionStatusRemote &
+  DataFeedRemote &
+  EventReviewRemote &
+  AutomationRemote &
+  PaperExecutionRemote;
 
 export function OperationsWorkspace({
   remote,

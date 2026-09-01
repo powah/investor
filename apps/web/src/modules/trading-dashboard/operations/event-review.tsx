@@ -1,8 +1,12 @@
 import { useCallback, useState } from "react";
 import { ArrowRight, CheckCircle2, ExternalLink, Newspaper } from "lucide-react";
-import type { PromotionDraft } from "@/modules/trading-dashboard/contracts";
 import { apiMessage, Field, formatOperationTime } from "@/modules/trading-dashboard/operations/shared";
 import type { ExternalNewsEvent } from "@/types/trading";
+
+export type PromotionDraft = {
+  catalyst_type: string;
+  quality_score: string;
+};
 
 export type EventReviewRemote = {
   listExternalEvents(): Promise<ExternalNewsEvent[]>;

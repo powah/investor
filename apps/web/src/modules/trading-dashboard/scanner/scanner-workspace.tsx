@@ -66,6 +66,18 @@ export function useScannerWorkspace(
   const [selectedTicker, setSelectedTicker] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ScannerFilter>("all");
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set());
+
+  const beginAction = useCallback((actionId: string) => {
+    setPendingActions((current) => new Set(current).add(actionId));
+  }, []);
+  const endAction = useCallback((actionId: string) => {
+    setPendingActions((current) => {
+      const next = new Set(current);
+      next.delete(actionId);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     const [candidateData, sessionData] = await Promise.all([
@@ -135,30 +147,48 @@ export function useScannerWorkspace(
   }, []);
 
   const startSession = useCallback(async () => {
-    const activeBeforeStart = sessions.find((session) => session.status === "running") ?? null;
-    const scannerSession = await remote.startSession();
-    setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
-    return activeBeforeStart?.id === scannerSession.id
-      ? `Scanner Session #${scannerSession.id} is already running; showing its persisted progress.`
-      : `Scanner Session #${scannerSession.id} started for ${scannerSession.trading_date}.`;
-  }, [remote, sessions]);
+    const actionId = "scanner-session";
+    beginAction(actionId);
+    try {
+      const activeBeforeStart = sessions.find((session) => session.status === "running") ?? null;
+      const scannerSession = await remote.startSession();
+      setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
+      return activeBeforeStart?.id === scannerSession.id
+        ? `Scanner Session #${scannerSession.id} is already running; showing its persisted progress.`
+        : `Scanner Session #${scannerSession.id} started for ${scannerSession.trading_date}.`;
+    } finally {
+      endAction(actionId);
+    }
+  }, [beginAction, endAction, remote, sessions]);
 
   const importSample = useCallback(
     async (refresh: () => Promise<void>) => {
-      await remote.importSampleCandidates();
-      await refresh();
-      return "Sample scanner data imported.";
+      const actionId = "import";
+      beginAction(actionId);
+      try {
+        await remote.importSampleCandidates();
+        await refresh();
+        return "Sample scanner data imported.";
+      } finally {
+        endAction(actionId);
+      }
     },
-    [remote],
+    [beginAction, endAction, remote],
   );
 
   const importCsv = useCallback(
     async (file: File, refresh: () => Promise<void>) => {
-      await remote.importCandidatesCsv(file);
-      await refresh();
-      return `${file.name} imported into the scanner.`;
+      const actionId = "csv-import";
+      beginAction(actionId);
+      try {
+        await remote.importCandidatesCsv(file);
+        await refresh();
+        return `${file.name} imported into the scanner.`;
+      } finally {
+        endAction(actionId);
+      }
     },
-    [remote],
+    [beginAction, endAction, remote],
   );
 
   const updateStatus = useCallback(
@@ -167,11 +197,17 @@ export function useScannerWorkspace(
       status: ScannerSymbol["status"],
       refresh: () => Promise<void>,
     ) => {
-      await remote.updateCandidateStatus(ticker, status);
-      await refresh();
-      return status === "watch" ? `${ticker} saved to watchlist.` : `${ticker} marked ${status}.`;
+      const actionId = `${ticker}-${status}`;
+      beginAction(actionId);
+      try {
+        await remote.updateCandidateStatus(ticker, status);
+        await refresh();
+        return status === "watch" ? `${ticker} saved to watchlist.` : `${ticker} marked ${status}.`;
+      } finally {
+        endAction(actionId);
+      }
     },
-    [remote],
+    [beginAction, endAction, remote],
   );
 
   return {
@@ -185,6 +221,7 @@ export function useScannerWorkspace(
     setSearch,
     filter,
     setFilter,
+    pendingActions,
     load,
     selectCandidate,
     startSession,
@@ -199,7 +236,6 @@ export type ScannerWorkspaceController = ReturnType<typeof useScannerWorkspace>;
 export function ScannerWorkspace({
   workspace,
   loading,
-  saving,
   watchedTickers,
   maxSpreadPct,
   onRun,
@@ -210,7 +246,6 @@ export function ScannerWorkspace({
 }: {
   workspace: ScannerWorkspaceController;
   loading: boolean;
-  saving: string | null;
   watchedTickers: Set<string>;
   maxSpreadPct: number;
   onRun: () => Promise<void>;
@@ -229,7 +264,7 @@ export function ScannerWorkspace({
         />
         <ScannerSessionPanel
           scannerSession={workspace.displayedSession}
-          starting={saving === "scanner-session"}
+          starting={workspace.pendingActions.has("scanner-session")}
           onRun={onRun}
         />
         <ScannerToolbar
@@ -244,7 +279,7 @@ export function ScannerWorkspace({
           loading={loading}
           selectedTicker={workspace.selectedTicker}
           watchedTickers={watchedTickers}
-          saving={saving}
+          pendingActions={workspace.pendingActions}
           maxSpreadPct={maxSpreadPct}
           onSelect={onSelect}
           onToggleWatch={onToggleWatch}
@@ -466,7 +501,7 @@ function ScannerTable({
   loading,
   selectedTicker,
   watchedTickers,
-  saving,
+  pendingActions,
   maxSpreadPct,
   onSelect,
   onToggleWatch,
@@ -476,7 +511,7 @@ function ScannerTable({
   loading: boolean;
   selectedTicker: string;
   watchedTickers: Set<string>;
-  saving: string | null;
+  pendingActions: ReadonlySet<string>;
   maxSpreadPct: number;
   onSelect: (symbol: ScannerSymbol) => void;
   onToggleWatch: (symbol: ScannerSymbol) => Promise<void>;
@@ -560,7 +595,7 @@ function ScannerTable({
                         type="button"
                         aria-label={watched ? `Remove ${symbol.ticker} from watchlist` : `Add ${symbol.ticker} to watchlist`}
                         aria-pressed={watched}
-                        disabled={saving === `${symbol.ticker}-watch` || saving === `${symbol.ticker}-candidate`}
+                        disabled={pendingActions.has(`${symbol.ticker}-watch`) || pendingActions.has(`${symbol.ticker}-candidate`)}
                         onClick={() => void onToggleWatch(symbol)}
                       >
                         <Eye className="h-4 w-4" aria-hidden="true" />
@@ -570,7 +605,7 @@ function ScannerTable({
                         className="icon-button"
                         type="button"
                         aria-label={`Ignore ${symbol.ticker}`}
-                        disabled={saving === `${symbol.ticker}-ignore`}
+                        disabled={pendingActions.has(`${symbol.ticker}-ignore`)}
                         onClick={() => void onIgnore(symbol)}
                       >
                         <EyeOff className="h-4 w-4" aria-hidden="true" />
@@ -603,7 +638,7 @@ function ScannerTable({
                     type="button"
                     aria-label={watched ? `Remove ${symbol.ticker} from watchlist` : `Add ${symbol.ticker} to watchlist`}
                     aria-pressed={watched}
-                    disabled={saving === `${symbol.ticker}-watch` || saving === `${symbol.ticker}-candidate`}
+                    disabled={pendingActions.has(`${symbol.ticker}-watch`) || pendingActions.has(`${symbol.ticker}-candidate`)}
                     onClick={() => void onToggleWatch(symbol)}
                   >
                     <Eye className="h-4 w-4" aria-hidden="true" />
@@ -612,7 +647,7 @@ function ScannerTable({
                     className="icon-button"
                     type="button"
                     aria-label={`Ignore ${symbol.ticker}`}
-                    disabled={saving === `${symbol.ticker}-ignore`}
+                    disabled={pendingActions.has(`${symbol.ticker}-ignore`)}
                     onClick={() => void onIgnore(symbol)}
                   >
                     <EyeOff className="h-4 w-4" aria-hidden="true" />

@@ -2,25 +2,18 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  ArrowRight,
   BarChart3,
   BookOpen,
   Calculator,
   CheckCircle2,
-  ClipboardList,
   Eye,
-  EyeOff,
   LayoutDashboard,
-  Play,
-  Plus,
   PlugZap,
   RefreshCw,
-  Search,
-  ShieldCheck,
   Settings,
   Upload,
 } from "lucide-react";
-import { ApiError, currency, number } from "@/lib/api";
+import { ApiError, currency } from "@/lib/api";
 import {
   AnalyticsSummaryPanel,
   AnalyticsWorkspace,
@@ -31,27 +24,42 @@ import {
   CandidateResearchPanel,
   useCandidateResearch,
 } from "@/modules/trading-dashboard/candidate-research/candidate-research";
-import { httpTradingDashboardRemote } from "@/modules/trading-dashboard/http-remote";
+import type { AnalyticsRemote } from "@/modules/trading-dashboard/analytics/analytics-workspace";
+import type { CandidateResearchRemote } from "@/modules/trading-dashboard/candidate-research/candidate-research";
+import { httpTradingDashboard } from "@/modules/trading-dashboard/http-trading-dashboard";
 import { JournalWorkspace, useJournalWorkspace } from "@/modules/trading-dashboard/journal/journal-workspace";
-import { OperationsWorkspace } from "@/modules/trading-dashboard/operations-workspace";
+import type { JournalRemote } from "@/modules/trading-dashboard/journal/journal-workspace";
+import { OperationsWorkspace, type OperationsRemote } from "@/modules/trading-dashboard/operations-workspace";
 import { PlannerWorkspace, usePlannerWorkspace } from "@/modules/trading-dashboard/planner/planner-workspace";
-import type { TradingDashboardRemote } from "@/modules/trading-dashboard/remote";
+import type { PlannerRemote } from "@/modules/trading-dashboard/planner/planner-workspace";
 import { RiskStatePanel } from "@/modules/trading-dashboard/risk/risk-presentation";
-import {
-  RiskRulesWorkspace,
-  useRiskRules,
-} from "@/modules/trading-dashboard/risk/risk-rules-workspace";
+import { RiskRulesWorkspace, useRiskRules } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
+import type { RiskRulesRemote } from "@/modules/trading-dashboard/risk/risk-rules-workspace";
 import {
   ScannerWorkspace,
   useScannerWorkspace,
 } from "@/modules/trading-dashboard/scanner/scanner-workspace";
-import {
-  useWatchlistWorkspace,
-  WatchlistWorkspace,
-} from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
-import type { RiskSettings, ScannerSymbol, TradePlan } from "@/types/trading";
+import type { ScannerRemote } from "@/modules/trading-dashboard/scanner/scanner-workspace";
+import { useWatchlistWorkspace, WatchlistWorkspace } from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
+import type { WatchlistRemote } from "@/modules/trading-dashboard/watchlist/watchlist-workspace";
+import type {
+  RiskSettings,
+  ScannerSymbol,
+  TradePlan,
+} from "@/types/trading";
 
 type WorkspaceView = "scanner" | "watchlist" | "planner" | "journal" | "analytics" | "operations" | "settings";
+
+type TradingDashboardDependencies = {
+  scanner: ScannerRemote;
+  candidateResearch: CandidateResearchRemote;
+  watchlist: WatchlistRemote;
+  riskRules: RiskRulesRemote;
+  planner: PlannerRemote;
+  journal: JournalRemote;
+  analytics: AnalyticsRemote;
+  operations: OperationsRemote;
+};
 
 function apiMessage(error: unknown) {
   if (error instanceof ApiError) {
@@ -96,10 +104,6 @@ function apiMessage(error: unknown) {
   return "Request failed.";
 }
 
-function toNumber(value: string) {
-  return Number(value);
-}
-
 const workspaceNavigation: Array<{
   id: WorkspaceView;
   label: string;
@@ -115,14 +119,13 @@ const workspaceNavigation: Array<{
   { id: "settings", label: "Risk rules", description: "Set guardrails", icon: Settings },
 ];
 
-export function LegacyTradingDashboard(
-  { remote = httpTradingDashboardRemote }: { remote?: TradingDashboardRemote } = {},
+export function TradingDashboard(
+  { remote = httpTradingDashboard }: { remote?: TradingDashboardDependencies } = {},
 ) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -152,6 +155,7 @@ export function LegacyTradingDashboard(
     settings,
     riskState,
   );
+
   async function loadAll() {
     setError(null);
     const [scannerData, , , riskData] =
@@ -185,11 +189,6 @@ export function LegacyTradingDashboard(
     journalWorkspace.selectCandidate(symbol);
   }
 
-  async function refreshWithNotice(message: string) {
-    await loadAll();
-    setNotice(message);
-  }
-
   async function refreshData() {
     setRefreshing(true);
     setError(null);
@@ -203,28 +202,24 @@ export function LegacyTradingDashboard(
     }
   }
 
-  async function importSample() {
-    setSaving("import");
+  async function report(task: () => Promise<string | null | void>) {
     setError(null);
     try {
-      setNotice(await scannerWorkspace.importSample(loadAll));
-    } catch (importError) {
-      setError(apiMessage(importError));
-    } finally {
-      setSaving(null);
+      const message = await task();
+      if (message) {
+        setNotice(message);
+      }
+    } catch (actionError) {
+      setError(apiMessage(actionError));
     }
   }
 
+  async function importSample() {
+    await report(() => scannerWorkspace.importSample(loadAll));
+  }
+
   async function runScanner() {
-    setSaving("scanner-session");
-    setError(null);
-    try {
-      setNotice(await scannerWorkspace.startSession());
-    } catch (scannerError) {
-      setError(apiMessage(scannerError));
-    } finally {
-      setSaving(null);
-    }
+    await report(scannerWorkspace.startSession);
   }
 
   async function importCsv(event: ChangeEvent<HTMLInputElement>) {
@@ -234,28 +229,15 @@ export function LegacyTradingDashboard(
       return;
     }
 
-    setSaving("csv-import");
-    setError(null);
-    try {
-      setNotice(await scannerWorkspace.importCsv(file, loadAll));
+    await report(async () => {
+      const message = await scannerWorkspace.importCsv(file, loadAll);
       setActiveView("scanner");
-    } catch (importError) {
-      setError(apiMessage(importError));
-    } finally {
-      setSaving(null);
-    }
+      return message;
+    });
   }
 
   async function updateStatus(ticker: string, status: ScannerSymbol["status"]) {
-    setSaving(`${ticker}-${status}`);
-    setError(null);
-    try {
-      setNotice(await scannerWorkspace.updateStatus(ticker, status, loadAll));
-    } catch (statusError) {
-      setError(apiMessage(statusError));
-    } finally {
-      setSaving(null);
-    }
+    await report(() => scannerWorkspace.updateStatus(ticker, status, loadAll));
   }
 
   async function toggleWatch(symbol: ScannerSymbol) {
@@ -263,27 +245,11 @@ export function LegacyTradingDashboard(
   }
 
   async function removeWatchlistItem(ticker: string) {
-    setSaving(`remove-${ticker}`);
-    setError(null);
-    try {
-      setNotice(await watchlistWorkspace.remove(ticker, loadAll));
-    } catch (removeError) {
-      setError(apiMessage(removeError));
-    } finally {
-      setSaving(null);
-    }
+    await report(() => watchlistWorkspace.remove(ticker, loadAll));
   }
 
   async function saveWatchlistNote(ticker: string) {
-    setSaving(`note-${ticker}`);
-    setError(null);
-    try {
-      setNotice(await watchlistWorkspace.saveNote(ticker, loadAll));
-    } catch (noteError) {
-      setError(apiMessage(noteError));
-    } finally {
-      setSaving(null);
-    }
+    await report(() => watchlistWorkspace.saveNote(ticker, loadAll));
   }
 
   function startPlan(symbol: ScannerSymbol) {
@@ -311,48 +277,22 @@ export function LegacyTradingDashboard(
 
   async function saveCatalyst(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving("catalyst");
-    setError(null);
-    try {
-      setNotice(await candidateResearch.saveReview(loadAll));
-    } catch (catalystError) {
-      setError(apiMessage(catalystError));
-    } finally {
-      setSaving(null);
-    }
+    await report(() => candidateResearch.saveReview(loadAll));
   }
 
   async function saveRiskSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    try {
-      const message = await riskRules.save(loadAll);
-      if (message) {
-        setNotice(message);
-      }
-    } catch (settingsError) {
-      setError(apiMessage(settingsError));
-    }
+    await report(() => riskRules.save(loadAll));
   }
 
   async function savePlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    try {
-      setNotice(await planner.save(loadAll));
-    } catch (planError) {
-      setError(apiMessage(planError));
-    }
+    await report(() => planner.save(loadAll));
   }
 
   async function saveJournal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    try {
-      setNotice(await journalWorkspace.save(loadAll));
-    } catch (journalError) {
-      setError(apiMessage(journalError));
-    }
+    await report(() => journalWorkspace.save(loadAll));
   }
 
   return (
@@ -379,14 +319,14 @@ export function LegacyTradingDashboard(
                 <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />
                 {refreshing ? "Refreshing" : "Refresh"}
               </button>
-              <button className="text-button" type="button" onClick={() => void importSample()} disabled={saving === "import"}>
+              <button className="text-button" type="button" onClick={() => void importSample()} disabled={scannerWorkspace.pendingActions.has("import")}>
                 <Activity className="h-4 w-4" aria-hidden="true" />
                 Load demo
               </button>
               <input ref={importInputRef} hidden type="file" accept=".csv,text/csv" tabIndex={-1} onChange={(event) => void importCsv(event)} />
-              <button className="primary-button" type="button" onClick={() => importInputRef.current?.click()} disabled={saving === "csv-import"}>
+              <button className="primary-button" type="button" onClick={() => importInputRef.current?.click()} disabled={scannerWorkspace.pendingActions.has("csv-import")}>
                 <Upload className="h-4 w-4" aria-hidden="true" />
-                {saving === "csv-import" ? "Importing" : "Import CSV"}
+                {scannerWorkspace.pendingActions.has("csv-import") ? "Importing" : "Import CSV"}
               </button>
             </div>
           </div>
@@ -463,7 +403,6 @@ export function LegacyTradingDashboard(
             <ScannerWorkspace
               workspace={scannerWorkspace}
               loading={loading}
-              saving={saving}
               watchedTickers={watchedTickers}
               maxSpreadPct={settings?.max_spread_pct ?? 1.5}
               onRun={runScanner}
@@ -475,7 +414,7 @@ export function LegacyTradingDashboard(
                   research={candidateResearch}
                   symbol={selectedSymbol}
                   isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                  saving={saving}
+                  pendingActions={scannerWorkspace.pendingActions}
                   onToggleWatch={toggleWatch}
                   onPlan={startPlan}
                   onSubmit={saveCatalyst}
@@ -488,7 +427,6 @@ export function LegacyTradingDashboard(
             <WatchlistWorkspace
               workspace={watchlistWorkspace}
               selectedTicker={selectedTicker}
-              saving={saving}
               onSelect={selectTicker}
               onRemove={removeWatchlistItem}
               onSaveNote={saveWatchlistNote}
@@ -498,7 +436,7 @@ export function LegacyTradingDashboard(
                     symbol={selectedSymbol}
                     catalysts={selectedCatalysts}
                     isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                    saving={saving}
+                    pendingActions={scannerWorkspace.pendingActions}
                     onToggleWatch={toggleWatch}
                     onPlan={startPlan}
                   />
@@ -518,7 +456,7 @@ export function LegacyTradingDashboard(
                   symbol={selectedSymbol}
                   catalysts={selectedCatalysts}
                   isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                  saving={saving}
+                  pendingActions={scannerWorkspace.pendingActions}
                   onToggleWatch={toggleWatch}
                   onPlan={startPlan}
                   compact
@@ -563,18 +501,5 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: stri
       <div className="label">{label}</div>
       <div className={`mt-1 text-xl font-semibold ${toneClass}`}>{value}</div>
     </div>
-  );
-}
-
-function TableHead({ children }: { children: React.ReactNode }) {
-  return <th className="px-3 py-3 font-semibold">{children}</th>;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="label mb-1 block">{label}</span>
-      {children}
-    </label>
   );
 }
