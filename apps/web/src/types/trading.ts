@@ -67,6 +67,50 @@ export type ScannerSessionDiagnostic = {
   completed_at: string | null;
 };
 
+export type SecurityIdentity = {
+  id: number;
+  identifier_source: string;
+  identifier: string;
+  issuer_name: string | null;
+};
+
+export type ListingIdentity = {
+  id: number;
+  security_id: number;
+  ticker: string;
+  exchange: string | null;
+  status: string | null;
+  instrument_type: string | null;
+  effective_from: string | null;
+  effective_to: string | null;
+  foreign_issuer: boolean | null;
+  depositary_to_underlying_ratio: number | null;
+};
+
+export type DiscoveryHit = {
+  id: number;
+  source: string;
+  source_reference: string;
+  observed_at: string;
+  ticker: string;
+  discovery_reason: string;
+  observed_listing: Omit<ListingIdentity, "id" | "security_id">;
+  admission_outcome: "admitted" | "rejected" | "unresolved";
+  admission_reasons: string[];
+  security: SecurityIdentity | null;
+  listing: ListingIdentity | null;
+  candidate_id: number | null;
+};
+
+export type ScannerSessionCandidate = {
+  id: number;
+  security: SecurityIdentity;
+  observed_listings: ListingIdentity[];
+  discovery_hit_ids: number[];
+  discovery_sources: string[];
+  discovery_reasons: string[];
+};
+
 export type ScannerSession = {
   id: number;
   status: "running" | "completed" | "partial" | "failed" | "cancelled";
@@ -84,6 +128,8 @@ export type ScannerSession = {
     percent: number;
   };
   diagnostics: ScannerSessionDiagnostic[];
+  discovery_hits: DiscoveryHit[];
+  candidates: ScannerSessionCandidate[];
 };
 
 export type WatchlistItem = {

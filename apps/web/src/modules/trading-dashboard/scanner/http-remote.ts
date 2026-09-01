@@ -13,7 +13,7 @@ export const httpScannerRemote: ScannerRemote = {
   importCandidatesCsv: (file) => {
     const body = new FormData();
     body.append("file", file);
-    return apiFetch<ScannerSymbol[]>("/scanner/import-csv", { method: "POST", body });
+    return apiFetch<ScannerSession>("/scanner-sessions/import-csv", { method: "POST", body });
   },
   updateCandidateStatus: (ticker, status) =>
     apiFetch<ScannerSymbol>(`/scanner/${encodeURIComponent(ticker)}/status`, {

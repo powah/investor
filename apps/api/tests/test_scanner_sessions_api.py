@@ -119,6 +119,27 @@ def scanner_client(scanner_database_url: str, request: pytest.FixtureRequest):
     engine.dispose()
 
 
+def _supplementary_input(**overrides) -> dict:
+    payload = {
+        "source": "manual",
+        "source_reference": "operator:research-desk",
+        "ticker": "SINT",
+        "discovery_reason": "Manual catalyst follow-up",
+        "security_identifier_source": "test_registry",
+        "security_identifier": "security-sint",
+        "issuer_name": "SINT Research Corp",
+        "exchange": "NASDAQ",
+        "listing_status": "active",
+        "instrument_type": "common_stock",
+        "effective_from": "2020-01-01",
+        "effective_to": None,
+        "foreign_issuer": False,
+        "depositary_to_underlying_ratio": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _wait_for_terminal(client: TestClient, session_id: int) -> dict:
     deadline = monotonic() + 5
     while monotonic() < deadline:
@@ -196,8 +217,12 @@ def test_repeated_and_concurrent_starts_return_one_active_session(scanner_client
 
     assert sessions[0]["id"] == sessions[1]["id"]
     assert discovery.started.wait(2)
-    repeated = client.post("/scanner-sessions").json()
+    repeated = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input()]},
+    ).json()
     assert repeated["id"] == sessions[0]["id"]
+    assert repeated["discovery_hits"] == []
     assert discovery.calls == 1
 
     discovery.release.set()
@@ -235,6 +260,215 @@ def test_required_discovery_failure_is_persisted_and_terminal(scanner_client):
     assert failed["diagnostics"][0]["details"] == {
         "capabilities": ["movers", "most_actives"]
     }
+
+
+def test_manual_and_csv_hits_are_retained_admitted_and_deduplicated_by_security(scanner_client):
+    client, _ = scanner_client
+    inputs = [
+        _supplementary_input(),
+        _supplementary_input(
+            source="csv",
+            source_reference="supplementary.csv:2",
+            ticker="SNTX",
+            exchange="NYSE",
+            effective_from="2021-01-01",
+            discovery_reason="CSV high-volume screen",
+        ),
+        _supplementary_input(
+            ticker="ABVC",
+            security_identifier="security-abvc",
+            issuer_name="Foreign Biotech Ltd",
+            exchange="NYSE American",
+            instrument_type="american_depositary_share",
+            foreign_issuer=True,
+            depositary_to_underlying_ratio=2.5,
+        ),
+        _supplementary_input(
+            ticker="FUND",
+            security_identifier="security-fund",
+            instrument_type="fund",
+        ),
+        _supplementary_input(
+            ticker="PINK",
+            security_identifier="security-pink",
+            exchange="OTC",
+        ),
+        _supplementary_input(
+            ticker="MYST",
+            security_identifier_source=None,
+            security_identifier=None,
+            instrument_type=None,
+        ),
+    ]
+
+    response = client.post("/scanner-sessions", json={"supplementary_inputs": inputs})
+
+    assert response.status_code == 202
+    session = response.json()
+    assert [hit["admission_outcome"] for hit in session["discovery_hits"]] == [
+        "admitted",
+        "admitted",
+        "admitted",
+        "rejected",
+        "rejected",
+        "unresolved",
+    ]
+    assert session["discovery_hits"][3]["admission_reasons"] == ["unsupported_instrument_type"]
+    assert session["discovery_hits"][4]["admission_reasons"] == ["unsupported_exchange"]
+    assert session["discovery_hits"][5]["admission_reasons"] == [
+        "security_identity_unresolved",
+        "instrument_classification_unresolved",
+    ]
+    assert session["discovery_hits"][5]["listing"] is None
+    assert session["discovery_hits"][5]["observed_listing"] == {
+        "ticker": "MYST",
+        "exchange": "nasdaq",
+        "status": "active",
+        "instrument_type": None,
+        "effective_from": "2020-01-01",
+        "effective_to": None,
+        "foreign_issuer": False,
+        "depositary_to_underlying_ratio": None,
+    }
+
+    candidates = session["candidates"]
+    assert len(candidates) == 2
+    sint = next(candidate for candidate in candidates if candidate["security"]["identifier"] == "security-sint")
+    assert sint["discovery_sources"] == ["manual", "csv"]
+    assert sint["discovery_reasons"] == ["Manual catalyst follow-up", "CSV high-volume screen"]
+    assert len(sint["discovery_hit_ids"]) == 2
+    assert {listing["ticker"] for listing in sint["observed_listings"]} == {"SINT", "SNTX"}
+    ads = next(candidate for candidate in candidates if candidate["security"]["identifier"] == "security-abvc")
+    assert ads["observed_listings"][0]["instrument_type"] == "american_depositary_share"
+    assert ads["observed_listings"][0]["foreign_issuer"] is True
+    assert ads["observed_listings"][0]["depositary_to_underlying_ratio"] == 2.5
+
+    completed = _wait_for_terminal(client, session["id"])
+    assert completed["status"] == "completed"
+    assert completed["candidates"] == candidates
+
+
+@pytest.mark.parametrize(
+    "instrument_type",
+    ["fund", "preferred_share", "unit", "warrant", "right"],
+)
+def test_candidate_admission_rejects_each_unsupported_instrument_type(
+    scanner_client,
+    instrument_type: str,
+):
+    client, _ = scanner_client
+
+    started = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(
+                    ticker="NOPE",
+                    security_identifier=f"unsupported-{instrument_type}",
+                    instrument_type=instrument_type,
+                )
+            ]
+        },
+    ).json()
+
+    assert started["candidates"] == []
+    assert started["discovery_hits"][0]["admission_outcome"] == "rejected"
+    assert started["discovery_hits"][0]["admission_reasons"] == [
+        "unsupported_instrument_type"
+    ]
+
+
+def test_ticker_changes_reuse_security_while_ticker_reuse_does_not_merge_history(scanner_client):
+    client, _ = scanner_client
+    first = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(ticker="OLD", security_identifier="issuer-a")
+            ]
+        },
+    ).json()
+    first = _wait_for_terminal(client, first["id"])
+    original_security_id = first["candidates"][0]["security"]["id"]
+
+    second = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(
+                    ticker="NEW",
+                    security_identifier="issuer-a",
+                    effective_from="2026-01-01",
+                ),
+                _supplementary_input(
+                    ticker="OLD",
+                    security_identifier="issuer-b",
+                    effective_from="2026-02-01",
+                ),
+            ]
+        },
+    ).json()
+
+    by_identifier = {
+        candidate["security"]["identifier"]: candidate for candidate in second["candidates"]
+    }
+    assert by_identifier["issuer-a"]["security"]["id"] == original_security_id
+    assert by_identifier["issuer-a"]["observed_listings"][0]["ticker"] == "NEW"
+    assert by_identifier["issuer-b"]["security"]["id"] != original_security_id
+    assert by_identifier["issuer-b"]["observed_listings"][0]["ticker"] == "OLD"
+    assert first["candidates"][0]["observed_listings"][0]["ticker"] == "OLD"
+
+
+def test_supplementary_csv_records_provenance_and_unresolved_identity(scanner_client):
+    client, _ = scanner_client
+    csv_text = "\n".join(
+        [
+            "ticker,discovery_reason,security_identifier_source,security_identifier,exchange,listing_status,instrument_type,effective_from,foreign_issuer,depositary_to_underlying_ratio",
+            "ABVC,CSV catalyst screen,test_registry,security-abvc,NYSE American,active,american_depositary_share,2020-01-01,true,2.5",
+            "MYST,Needs identity resolution,,,,,,,,",
+        ]
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("supplementary.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 202
+    hits = response.json()["discovery_hits"]
+    assert [hit["source"] for hit in hits] == ["csv", "csv"]
+    assert [hit["source_reference"] for hit in hits] == [
+        "supplementary.csv:2",
+        "supplementary.csv:3",
+    ]
+    assert [hit["admission_outcome"] for hit in hits] == ["admitted", "unresolved"]
+
+
+@pytest.mark.parametrize(
+    "scanner_client",
+    [
+        ControlledDiscovery(
+            failure=DiscoveryUnavailable(
+                code="required_discovery_unavailable",
+                message="Required discovery unavailable.",
+            )
+        )
+    ],
+    indirect=True,
+)
+def test_supplementary_inputs_cannot_complete_without_market_movement_discovery(scanner_client):
+    client, _ = scanner_client
+
+    started = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input()]},
+    ).json()
+    failed = _wait_for_terminal(client, started["id"])
+
+    assert failed["status"] == "failed"
+    assert len(failed["candidates"]) == 1
+    assert failed["discovery_hits"][0]["admission_outcome"] == "admitted"
+    assert failed["diagnostics"][0]["code"] == "required_discovery_unavailable"
 
 
 def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):

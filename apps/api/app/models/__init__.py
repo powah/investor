@@ -11,7 +11,14 @@ from app.models.integrations import (
     ProviderCapabilityCheck,
 )
 from app.models.legacy_imports import LegacyImport
-from app.models.scanner_sessions import ScannerSession, ScannerSessionDiagnostic
+from app.models.scanner_sessions import (
+    DiscoveryHit,
+    Listing,
+    ScannerSession,
+    ScannerSessionCandidate,
+    ScannerSessionDiagnostic,
+    Security,
+)
 from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol, TradePlan, WatchlistItem
 
 __all__ = [
@@ -21,16 +28,20 @@ __all__ = [
     "BrokerStreamState",
     "BrokerTradeUpdate",
     "Catalyst",
+    "DiscoveryHit",
     "ExecutionIntent",
     "ExternalNewsEvent",
     "IntegrationSyncRun",
     "JournalEntry",
     "LegacyImport",
+    "Listing",
     "MarketDataSnapshot",
     "ProviderCapabilityCheck",
     "RiskSettings",
     "ScannerSession",
+    "ScannerSessionCandidate",
     "ScannerSessionDiagnostic",
+    "Security",
     "ScannerSymbol",
     "TradePlan",
     "WatchlistItem",

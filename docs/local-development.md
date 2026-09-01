@@ -169,16 +169,18 @@ The REST adapter requests symbol-linked articles with the same Alpaca credential
 
 The SEC adapter downloads the public ticker map and recent company submissions, filters relevant forms, and paces per-company requests. Filings such as 8-K/6-K, registration/prospectus forms, EFFECT notices, periodic reports, and ownership reports are stored as external review events. A filing form alone is not a positive catalyst.
 
-## First sample scanner CSV
+## Supplementary Scanner Session CSV
 
 ```csv
-ticker,price,gap_pct,rel_volume,float_m,market_cap_m,spread_pct,catalyst_type,above_vwap,news_headline
-SINT,2.35,42,18.4,8.2,21,0.9,FDA,true,Positive Phase 2 clinical data announced
-ABVC,3.12,27,9.1,12.5,38,1.2,Contract,true,Company announces new distribution agreement
-XYZ,1.84,16,4.3,55.0,120,2.4,Vague PR,false,Company provides strategic update
+ticker,discovery_reason,security_identifier_source,security_identifier,issuer_name,exchange,listing_status,instrument_type,effective_from,effective_to,foreign_issuer,depositary_to_underlying_ratio
+SINT,Manual catalyst follow-up,openfigi,BBG000SINT00,SINT Research Corp,Nasdaq,active,common_stock,2020-01-01,,false,
+ABVC,Foreign issuer catalyst,openfigi,BBG000ABVC00,Foreign Biotech Ltd,NYSE American,active,american_depositary_share,2021-04-15,,true,2.5
+MYST,Needs identity resolution,,,,,,,,,,
 ```
 
-The current pre-session Scanner accepts UTF-8 CSV uploads with these required columns. Optional boolean columns `clean_daily_chart_room`, `holding_key_level`, and `no_dilution_red_flag` make its legacy scoring inputs explicit. Use `true` or `false`; unverified values should not be treated as positive evidence. The scanner-session milestone replaces these overloaded booleans with sourced Candidate Evidence and a human Capital Structure Review, while preserving imported rows as a non-actionable Legacy Import.
+The dashboard's **Import CSV** action submits UTF-8 supplementary discovery to a new Scanner Session. Only `ticker` is required, but a hit remains unresolved unless stable Security identity, Listing exchange/status/instrument classification, and effective date are supplied. Supported instruments are `common_stock` and `american_depositary_share`; missing fields are never guessed. CSV provenance includes the filename and row. Supplementary discovery cannot make a run completed when required Market-Movement Discovery fails.
+
+The additive pre-session API at `/scanner/import-csv` still accepts the older scoring-input CSV shape while the workspace cutover is in progress. Those mutable rows are not Scanner Session Candidates.
 
 ## Frontend/API proxy
 

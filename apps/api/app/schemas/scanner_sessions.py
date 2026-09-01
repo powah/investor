@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.scanner_session_types import (
     MarketPhase,
@@ -11,6 +11,94 @@ from app.scanner_session_types import (
     ScannerSessionStage,
     ScannerSessionStatus,
 )
+
+
+class SupplementaryDiscoveryInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    source: Literal["manual", "csv"] = "manual"
+    source_reference: str = Field(min_length=1, max_length=500)
+    observed_at: Optional[datetime] = None
+    ticker: str = Field(min_length=1, max_length=24)
+    discovery_reason: str = Field(min_length=1, max_length=500)
+    security_identifier_source: Optional[str] = Field(default=None, max_length=80)
+    security_identifier: Optional[str] = Field(default=None, max_length=160)
+    issuer_name: Optional[str] = Field(default=None, max_length=240)
+    exchange: Optional[str] = Field(default=None, max_length=40)
+    listing_status: Optional[str] = Field(default=None, max_length=40)
+    instrument_type: Optional[str] = Field(default=None, max_length=80)
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+    foreign_issuer: Optional[bool] = None
+    depositary_to_underlying_ratio: Optional[float] = Field(default=None, gt=0)
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_at_must_include_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("observed_at must include a timezone")
+        return value
+
+
+class ScannerSessionStart(BaseModel):
+    supplementary_inputs: list[SupplementaryDiscoveryInput] = Field(
+        default_factory=list, max_length=1000
+    )
+
+
+class SecurityRead(BaseModel):
+    id: int
+    identifier_source: str
+    identifier: str
+    issuer_name: Optional[str]
+
+
+class ListingRead(BaseModel):
+    id: int
+    security_id: int
+    ticker: str
+    exchange: Optional[str]
+    status: Optional[str]
+    instrument_type: Optional[str]
+    effective_from: Optional[date]
+    effective_to: Optional[date]
+    foreign_issuer: Optional[bool]
+    depositary_to_underlying_ratio: Optional[float]
+
+
+class ListingObservationRead(BaseModel):
+    ticker: str
+    exchange: Optional[str]
+    status: Optional[str]
+    instrument_type: Optional[str]
+    effective_from: Optional[date]
+    effective_to: Optional[date]
+    foreign_issuer: Optional[bool]
+    depositary_to_underlying_ratio: Optional[float]
+
+
+class DiscoveryHitRead(BaseModel):
+    id: int
+    source: str
+    source_reference: str
+    observed_at: datetime
+    ticker: str
+    discovery_reason: str
+    observed_listing: ListingObservationRead
+    admission_outcome: Literal["admitted", "rejected", "unresolved"]
+    admission_reasons: list[str]
+    security: Optional[SecurityRead]
+    listing: Optional[ListingRead]
+    candidate_id: Optional[int]
+
+
+class CandidateRead(BaseModel):
+    id: int
+    security: SecurityRead
+    observed_listings: list[ListingRead]
+    discovery_hit_ids: list[int]
+    discovery_sources: list[str]
+    discovery_reasons: list[str]
 
 
 class ScannerSessionProgressRead(BaseModel):
@@ -45,3 +133,5 @@ class ScannerSessionRead(BaseModel):
     scoring_model_version: str
     progress: ScannerSessionProgressRead
     diagnostics: list[ScannerSessionDiagnosticRead]
+    discovery_hits: list[DiscoveryHitRead]
+    candidates: list[CandidateRead]

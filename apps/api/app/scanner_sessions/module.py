@@ -11,8 +11,16 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.scanner_sessions import ScannerSession, ScannerSessionDiagnostic
+from app.models.scanner_sessions import (
+    DiscoveryHit,
+    Listing,
+    ScannerSession,
+    ScannerSessionCandidate,
+    ScannerSessionDiagnostic,
+    Security,
+)
 from app.scanner_session_types import ScannerSessionDiagnosticStatus
+from app.scanner_sessions.admission import admit_supplementary_inputs
 from app.scanner_sessions.domain import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -21,9 +29,15 @@ from app.scanner_sessions.domain import (
     utc_now,
 )
 from app.schemas.scanner_sessions import (
+    CandidateRead,
+    DiscoveryHitRead,
+    ListingObservationRead,
+    ListingRead,
     ScannerSessionDiagnosticRead,
     ScannerSessionProgressRead,
     ScannerSessionRead,
+    SecurityRead,
+    SupplementaryDiscoveryInput,
 )
 
 
@@ -79,7 +93,10 @@ class ScannerSessions:
         self._owner_id = uuid4().hex
         self._tasks: set[asyncio.Task[None]] = set()
 
-    async def start(self) -> ScannerSessionRead:
+    async def start(
+        self,
+        supplementary_inputs: list[SupplementaryDiscoveryInput] | None = None,
+    ) -> ScannerSessionRead:
         self.recover_interrupted()
         with self._session_factory() as db:
             active = self._active(db)
@@ -116,6 +133,13 @@ class ScannerSessions:
             )
             db.add(session)
             try:
+                db.flush()
+                admit_supplementary_inputs(
+                    db,
+                    session=session,
+                    inputs=supplementary_inputs or [],
+                    observed_at=started_at,
+                )
                 db.commit()
             except IntegrityError:
                 db.rollback()
@@ -137,7 +161,7 @@ class ScannerSessions:
         with self._session_factory() as db:
             sessions = (
                 db.query(ScannerSession)
-                .options(selectinload(ScannerSession.diagnostics))
+                .options(*self._load_options())
                 .order_by(ScannerSession.started_at.desc(), ScannerSession.id.desc())
                 .all()
             )
@@ -154,7 +178,7 @@ class ScannerSessions:
         with self._session_factory() as db:
             active = (
                 db.query(ScannerSession)
-                .options(selectinload(ScannerSession.diagnostics))
+                .options(*self._load_options())
                 .filter(
                     ScannerSession.active_slot.is_(True),
                     or_(
@@ -314,20 +338,20 @@ class ScannerSessions:
         session.completed_at = completed_at
         session.active_slot = None
 
-    @staticmethod
-    def _active(db: Session) -> ScannerSession | None:
+    @classmethod
+    def _active(cls, db: Session) -> ScannerSession | None:
         return (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*cls._load_options())
             .filter(ScannerSession.active_slot.is_(True))
             .one_or_none()
         )
 
-    @staticmethod
-    def _by_id(db: Session, session_id: int) -> ScannerSession:
+    @classmethod
+    def _by_id(cls, db: Session, session_id: int) -> ScannerSession:
         session = (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*cls._load_options())
             .filter(ScannerSession.id == session_id)
             .one_or_none()
         )
@@ -344,7 +368,7 @@ class ScannerSessions:
     ) -> ScannerSession | None:
         query = (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*self._load_options())
             .filter(
                 ScannerSession.id == session_id,
                 ScannerSession.active_slot.is_(True),
@@ -356,7 +380,43 @@ class ScannerSessions:
         return query.one_or_none()
 
     @staticmethod
-    def _read(session: ScannerSession) -> ScannerSessionRead:
+    def _load_options() -> tuple[Any, ...]:
+        return (
+            selectinload(ScannerSession.diagnostics),
+            selectinload(ScannerSession.discovery_hits).selectinload(DiscoveryHit.security),
+            selectinload(ScannerSession.discovery_hits).selectinload(DiscoveryHit.listing),
+            selectinload(ScannerSession.candidates).selectinload(ScannerSessionCandidate.security),
+            selectinload(ScannerSession.candidates)
+            .selectinload(ScannerSessionCandidate.discovery_hits)
+            .selectinload(DiscoveryHit.listing),
+        )
+
+    @staticmethod
+    def _security_read(security: Security) -> SecurityRead:
+        return SecurityRead(
+            id=security.id,
+            identifier_source=security.identifier_source,
+            identifier=security.identifier,
+            issuer_name=security.issuer_name,
+        )
+
+    @staticmethod
+    def _listing_read(listing: Listing) -> ListingRead:
+        return ListingRead(
+            id=listing.id,
+            security_id=listing.security_id,
+            ticker=listing.ticker,
+            exchange=listing.exchange,
+            status=listing.status,
+            instrument_type=listing.instrument_type,
+            effective_from=listing.effective_from,
+            effective_to=listing.effective_to,
+            foreign_issuer=listing.foreign_issuer,
+            depositary_to_underlying_ratio=listing.depositary_to_underlying_ratio,
+        )
+
+    @classmethod
+    def _read(cls, session: ScannerSession) -> ScannerSessionRead:
         total = session.progress_total
         percent = round((session.progress_completed / total) * 100) if total else 0
         return ScannerSessionRead(
@@ -390,4 +450,56 @@ class ScannerSessions:
                 )
                 for diagnostic in session.diagnostics
             ],
+            discovery_hits=[
+                DiscoveryHitRead(
+                    id=hit.id,
+                    source=hit.source,
+                    source_reference=hit.source_reference,
+                    observed_at=hit.observed_at,
+                    ticker=hit.ticker,
+                    discovery_reason=hit.discovery_reason,
+                    observed_listing=ListingObservationRead(
+                        ticker=hit.ticker,
+                        exchange=hit.observed_exchange,
+                        status=hit.observed_listing_status,
+                        instrument_type=hit.observed_instrument_type,
+                        effective_from=hit.observed_effective_from,
+                        effective_to=hit.observed_effective_to,
+                        foreign_issuer=hit.observed_foreign_issuer,
+                        depositary_to_underlying_ratio=(
+                            hit.observed_depositary_to_underlying_ratio
+                        ),
+                    ),
+                    admission_outcome=hit.admission_outcome,
+                    admission_reasons=hit.admission_reasons,
+                    security=cls._security_read(hit.security) if hit.security else None,
+                    listing=cls._listing_read(hit.listing) if hit.listing else None,
+                    candidate_id=hit.candidate_id,
+                )
+                for hit in session.discovery_hits
+            ],
+            candidates=[cls._candidate_read(candidate) for candidate in session.candidates],
+        )
+
+    @classmethod
+    def _candidate_read(cls, candidate: ScannerSessionCandidate) -> CandidateRead:
+        listings: list[ListingRead] = []
+        listing_ids: set[int] = set()
+        sources: list[str] = []
+        reasons: list[str] = []
+        for hit in candidate.discovery_hits:
+            if hit.listing is not None and hit.listing.id not in listing_ids:
+                listings.append(cls._listing_read(hit.listing))
+                listing_ids.add(hit.listing.id)
+            if hit.source not in sources:
+                sources.append(hit.source)
+            if hit.discovery_reason not in reasons:
+                reasons.append(hit.discovery_reason)
+        return CandidateRead(
+            id=candidate.id,
+            security=cls._security_read(candidate.security),
+            observed_listings=listings,
+            discovery_hit_ids=[hit.id for hit in candidate.discovery_hits],
+            discovery_sources=sources,
+            discovery_reasons=reasons,
         )
