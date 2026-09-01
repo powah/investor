@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from alembic import command
+import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
@@ -105,6 +106,36 @@ def test_legacy_import_migration_is_idempotent_and_preserves_only_known_values(t
         "source_timestamp": None,
     }
     assert current_rows == []
+
+
+def test_legacy_import_migration_refuses_a_destructive_downgrade(tmp_path):
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'legacy-import-downgrade.sqlite'}"
+    config = _config(database_url)
+    command.upgrade(config, "8b2f14d7a1c3")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO scanner_symbols (
+                    ticker, price, gap_pct, rel_volume, float_m, market_cap_m,
+                    spread_pct, above_vwap, clean_daily_chart_room,
+                    holding_key_level, no_dilution_red_flag, status, data_origin
+                ) VALUES (
+                    'KEEP', 2.35, 42.0, 18.4, 8.2, 21.0,
+                    0.9, 1, 1, 0, 1, 'watch', 'manual_import'
+                )
+                """
+            )
+        )
+    command.upgrade(config, "head")
+
+    with pytest.raises(RuntimeError, match="Legacy Imports contain preserved scanner history"):
+        command.downgrade(config, "8b2f14d7a1c3")
+
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT ticker FROM legacy_imports")).scalar_one() == "KEEP"
+        assert connection.execute(text("SELECT count(*) FROM scanner_symbols")).scalar_one() == 0
 
 
 def test_migrations_adopt_the_pre_phase_zero_schema(tmp_path):

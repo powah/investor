@@ -120,6 +120,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    retained_count = op.get_bind().execute(
+        sa.text("SELECT count(*) FROM legacy_imports")
+    ).scalar_one()
+    if retained_count:
+        raise RuntimeError(
+            "Cannot downgrade: Legacy Imports contain preserved scanner history. "
+            "Export or otherwise retain that history before removing this revision."
+        )
+
     op.drop_index("ix_legacy_imports_ticker", table_name="legacy_imports")
     op.drop_index("ix_legacy_imports_data_origin", table_name="legacy_imports")
     op.drop_table("legacy_imports")
