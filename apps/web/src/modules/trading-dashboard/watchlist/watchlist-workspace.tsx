@@ -11,7 +11,18 @@ export type WatchlistRemote = {
 export function useWatchlistWorkspace(remote: WatchlistRemote) {
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
-  const [action, setAction] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set());
+
+  const beginAction = useCallback((actionId: string) => {
+    setPendingActions((current) => new Set(current).add(actionId));
+  }, []);
+  const endAction = useCallback((actionId: string) => {
+    setPendingActions((current) => {
+      const next = new Set(current);
+      next.delete(actionId);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     const values = await remote.listItems();
@@ -47,30 +58,32 @@ export function useWatchlistWorkspace(remote: WatchlistRemote) {
 
   const remove = useCallback(
     async (ticker: string, refresh: () => Promise<void>) => {
-      setAction(`remove-${ticker}`);
+      const actionId = `remove-${ticker}`;
+      beginAction(actionId);
       try {
         await remote.removeItem(ticker);
         await refresh();
         return `${ticker} removed from watchlist.`;
       } finally {
-        setAction(null);
+        endAction(actionId);
       }
     },
-    [remote],
+    [beginAction, endAction, remote],
   );
 
   const saveNote = useCallback(
     async (ticker: string, refresh: () => Promise<void>) => {
-      setAction(`note-${ticker}`);
+      const actionId = `note-${ticker}`;
+      beginAction(actionId);
       try {
         await remote.saveNotes(ticker, noteDrafts[ticker] || "");
         await refresh();
         return `${ticker} watch notes saved.`;
       } finally {
-        setAction(null);
+        endAction(actionId);
       }
     },
-    [noteDrafts, remote],
+    [beginAction, endAction, noteDrafts, remote],
   );
 
   const setNoteDraft = useCallback((ticker: string, value: string) => {
@@ -81,7 +94,7 @@ export function useWatchlistWorkspace(remote: WatchlistRemote) {
     items,
     watchedTickers,
     noteDrafts,
-    action,
+    pendingActions,
     setNoteDraft,
     load,
     ensureWatchedSelection,
@@ -121,7 +134,7 @@ export function WatchlistWorkspace({
           watchedTickers={workspace.watchedTickers}
           onSelect={onSelect}
           onRemove={onRemove}
-          saving={workspace.action}
+          pendingActions={workspace.pendingActions}
         />
         {selectedItem && (
           <WatchNotesPanel
@@ -129,7 +142,7 @@ export function WatchlistWorkspace({
             value={workspace.noteDrafts[selectedItem.ticker] ?? ""}
             onChange={(value) => workspace.setNoteDraft(selectedItem.ticker, value)}
             onSave={() => onSaveNote(selectedItem.ticker)}
-            saving={workspace.action === `note-${selectedItem.ticker}`}
+            saving={workspace.pendingActions.has(`note-${selectedItem.ticker}`)}
           />
         )}
       </div>
@@ -206,13 +219,13 @@ function WatchlistPanel({
   watchedTickers,
   onSelect,
   onRemove,
-  saving,
+  pendingActions,
 }: {
   items: WatchlistItem[];
   watchedTickers: Set<string>;
   onSelect: (symbol: ScannerSymbol) => void;
   onRemove: (ticker: string) => Promise<void>;
-  saving: string | null;
+  pendingActions: ReadonlySet<string>;
 }) {
   return (
     <section className="panel overflow-hidden rounded-xl">
@@ -243,7 +256,7 @@ function WatchlistPanel({
               className="icon-button shrink-0"
               type="button"
               aria-label={`Remove ${item.ticker} from watchlist`}
-              disabled={saving === `remove-${item.ticker}`}
+              disabled={pendingActions.has(`remove-${item.ticker}`)}
               onClick={() => void onRemove(item.ticker)}
             >
               <Trash2 className="h-4 w-4" aria-hidden="true" />

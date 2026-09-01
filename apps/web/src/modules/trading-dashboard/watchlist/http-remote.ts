@@ -4,7 +4,7 @@ import type { WatchlistItem } from "@/types/trading";
 
 export const httpWatchlistRemote: WatchlistRemote = {
   listItems: () => apiFetch<WatchlistItem[]>("/watchlist"),
-  removeItem: (ticker) => apiFetch<void>(`/watchlist/${ticker}`, { method: "DELETE", emptyResponse: true }),
+  removeItem: (ticker) => apiFetch<void>(`/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE", emptyResponse: true }),
   saveNotes: (ticker, notes) =>
     apiFetch<WatchlistItem>("/watchlist", {
       method: "POST",

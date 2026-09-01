@@ -319,14 +319,14 @@ export function TradingDashboard(
                 <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden="true" />
                 {refreshing ? "Refreshing" : "Refresh"}
               </button>
-              <button className="text-button" type="button" onClick={() => void importSample()} disabled={scannerWorkspace.action === "import"}>
+              <button className="text-button" type="button" onClick={() => void importSample()} disabled={scannerWorkspace.pendingActions.has("import")}>
                 <Activity className="h-4 w-4" aria-hidden="true" />
                 Load demo
               </button>
               <input ref={importInputRef} hidden type="file" accept=".csv,text/csv" tabIndex={-1} onChange={(event) => void importCsv(event)} />
-              <button className="primary-button" type="button" onClick={() => importInputRef.current?.click()} disabled={scannerWorkspace.action === "csv-import"}>
+              <button className="primary-button" type="button" onClick={() => importInputRef.current?.click()} disabled={scannerWorkspace.pendingActions.has("csv-import")}>
                 <Upload className="h-4 w-4" aria-hidden="true" />
-                {scannerWorkspace.action === "csv-import" ? "Importing" : "Import CSV"}
+                {scannerWorkspace.pendingActions.has("csv-import") ? "Importing" : "Import CSV"}
               </button>
             </div>
           </div>
@@ -414,7 +414,7 @@ export function TradingDashboard(
                   research={candidateResearch}
                   symbol={selectedSymbol}
                   isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                  saving={scannerWorkspace.action}
+                  pendingActions={scannerWorkspace.pendingActions}
                   onToggleWatch={toggleWatch}
                   onPlan={startPlan}
                   onSubmit={saveCatalyst}
@@ -436,7 +436,7 @@ export function TradingDashboard(
                     symbol={selectedSymbol}
                     catalysts={selectedCatalysts}
                     isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                    saving={scannerWorkspace.action}
+                    pendingActions={scannerWorkspace.pendingActions}
                     onToggleWatch={toggleWatch}
                     onPlan={startPlan}
                   />
@@ -456,7 +456,7 @@ export function TradingDashboard(
                   symbol={selectedSymbol}
                   catalysts={selectedCatalysts}
                   isWatched={Boolean(selectedSymbol && watchedTickers.has(selectedSymbol.ticker))}
-                  saving={scannerWorkspace.action}
+                  pendingActions={scannerWorkspace.pendingActions}
                   onToggleWatch={toggleWatch}
                   onPlan={startPlan}
                   compact

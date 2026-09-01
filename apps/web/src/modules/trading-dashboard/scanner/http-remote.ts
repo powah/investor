@@ -14,7 +14,7 @@ export const httpScannerRemote: ScannerRemote = {
     return apiFetch<ScannerSymbol[]>("/scanner/import-csv", { method: "POST", body });
   },
   updateCandidateStatus: (ticker, status) =>
-    apiFetch<ScannerSymbol>(`/scanner/${ticker}/status`, {
+    apiFetch<ScannerSymbol>(`/scanner/${encodeURIComponent(ticker)}/status`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),

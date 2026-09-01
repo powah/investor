@@ -79,7 +79,7 @@ export function CandidateResearchPanel({
   research,
   symbol,
   isWatched,
-  saving,
+  pendingActions,
   onToggleWatch,
   onPlan,
   onSubmit,
@@ -87,7 +87,7 @@ export function CandidateResearchPanel({
   research: CandidateResearchController;
   symbol: ScannerSymbol | null;
   isWatched: boolean;
-  saving: string | null;
+  pendingActions: ReadonlySet<string>;
   onToggleWatch: (symbol: ScannerSymbol) => Promise<void>;
   onPlan: (symbol: ScannerSymbol) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -98,7 +98,7 @@ export function CandidateResearchPanel({
         symbol={symbol}
         catalysts={research.selectedCatalysts}
         isWatched={isWatched}
-        saving={saving}
+        pendingActions={pendingActions}
         onToggleWatch={onToggleWatch}
         onPlan={onPlan}
       />
@@ -137,7 +137,7 @@ export function CandidateDetailPanel({
   symbol,
   catalysts,
   isWatched,
-  saving,
+  pendingActions,
   onToggleWatch,
   onPlan,
   compact = false,
@@ -145,7 +145,7 @@ export function CandidateDetailPanel({
   symbol: ScannerSymbol | null;
   catalysts: Catalyst[];
   isWatched: boolean;
-  saving: string | null;
+  pendingActions: ReadonlySet<string>;
   onToggleWatch: (symbol: ScannerSymbol) => Promise<void>;
   onPlan: (symbol: ScannerSymbol) => void;
   compact?: boolean;
@@ -260,7 +260,7 @@ export function CandidateDetailPanel({
             className={isWatched ? "secondary-active-button" : "text-button"}
             type="button"
             aria-pressed={isWatched}
-            disabled={saving === `${symbol.ticker}-watch` || saving === `${symbol.ticker}-candidate`}
+            disabled={pendingActions.has(`${symbol.ticker}-watch`) || pendingActions.has(`${symbol.ticker}-candidate`)}
             onClick={() => void onToggleWatch(symbol)}
           >
             <Eye className="h-4 w-4" aria-hidden="true" />

@@ -41,7 +41,7 @@ function buildWorkspace(candidate: ScannerSymbol, action: string | null = null):
     setSearch: vi.fn(),
     filter: "all",
     setFilter: vi.fn(),
-    action,
+    pendingActions: new Set(action ? [action] : []),
     load: vi.fn(),
     selectCandidate: vi.fn(),
     startSession: vi.fn(),
@@ -135,6 +135,44 @@ describe("scanner workspace", () => {
 
     rerender(createElement(ScannerWorkspace, { ...props, workspace: buildWorkspace(candidate, "ALFA-ignore") }));
     expect(mobile.getByRole("button", { name: "Ignore ALFA" })).toBeDisabled();
+  });
+
+  test("keeps concurrent scanner actions pending independently", async () => {
+    const sampleImport = deferred<ScannerSymbol[]>();
+    const csvImport = deferred<ScannerSymbol[]>();
+    const remote: ScannerRemote = {
+      listCandidates: vi.fn().mockResolvedValue([]),
+      listSessions: vi.fn().mockResolvedValue([]),
+      getSession: vi.fn(),
+      importSampleCandidates: vi.fn(() => sampleImport.promise),
+      startSession: vi.fn(),
+      importCandidatesCsv: vi.fn(() => csvImport.promise),
+      updateCandidateStatus: vi.fn(),
+    };
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }),
+    );
+    let samplePromise!: Promise<string>;
+    let csvPromise!: Promise<string>;
+
+    act(() => {
+      samplePromise = result.current.importSample(refresh);
+      csvPromise = result.current.importCsv(new File(["ticker"], "candidates.csv"), refresh);
+    });
+    expect(result.current.pendingActions).toEqual(new Set(["import", "csv-import"]));
+
+    sampleImport.resolve([]);
+    await act(async () => {
+      await samplePromise;
+    });
+    expect(result.current.pendingActions).toEqual(new Set(["csv-import"]));
+
+    csvImport.resolve([]);
+    await act(async () => {
+      await csvPromise;
+    });
+    expect(result.current.pendingActions).toEqual(new Set());
   });
 
   test("does not overlap Scanner Session refresh requests", async () => {
