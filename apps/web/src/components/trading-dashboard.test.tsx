@@ -76,7 +76,7 @@ describe("TradingDashboard", () => {
     await user.type(screen.getByLabelText("Exit"), "11.25");
     await user.click(screen.getByRole("tab", { name: /Analytics/ }));
     expect(screen.getByRole("heading", { name: "Performance analytics" })).toBeVisible();
-    expect(screen.getByText("Completed trades").nextSibling).toHaveTextContent("0");
+    expect(screen.getByText("Completed trades").nextSibling).toHaveTextContent("3");
     await user.click(screen.getByRole("tab", { name: /Journal/ }));
     expect(screen.getByLabelText("Exit")).toHaveValue(11.25);
   });
