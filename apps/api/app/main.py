@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.api.integrations import router as integrations_router
+from app.api.legacy_imports import router as legacy_imports_router
 from app.api.scanner_sessions import router as scanner_sessions_router
 from app.core.config import get_settings
 from app.core.database import SessionLocal
@@ -42,3 +43,4 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(integrations_router)
 app.include_router(scanner_sessions_router)
+app.include_router(legacy_imports_router)

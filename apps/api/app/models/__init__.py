@@ -10,6 +10,7 @@ from app.models.integrations import (
     MarketDataSnapshot,
     ProviderCapabilityCheck,
 )
+from app.models.legacy_imports import LegacyImport
 from app.models.scanner_sessions import ScannerSession, ScannerSessionDiagnostic
 from app.models.trading import Catalyst, JournalEntry, RiskSettings, ScannerSymbol, TradePlan, WatchlistItem
 
@@ -24,6 +25,7 @@ __all__ = [
     "ExternalNewsEvent",
     "IntegrationSyncRun",
     "JournalEntry",
+    "LegacyImport",
     "MarketDataSnapshot",
     "ProviderCapabilityCheck",
     "RiskSettings",

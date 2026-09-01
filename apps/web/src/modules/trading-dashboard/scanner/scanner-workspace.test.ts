@@ -1,4 +1,5 @@
-import { act, render, renderHook, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
@@ -9,7 +10,7 @@ import {
   type ScannerWorkspaceController,
 } from "@/modules/trading-dashboard/scanner/scanner-workspace";
 import { buildCandidate } from "@/test/fixtures";
-import type { ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
 
 function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
   return {
@@ -33,6 +34,10 @@ function buildWorkspace(candidate: ScannerSymbol, action: string | null = null):
   return {
     candidates: [candidate],
     sessions: [],
+    legacyImports: [],
+    legacyImportsError: null,
+    scannerView: "current",
+    legacyContext: "operational",
     selectedTicker: candidate.ticker,
     selectedCandidate: candidate,
     displayedSession: buildSession({ status: "completed", stage: "completed" }),
@@ -44,6 +49,9 @@ function buildWorkspace(candidate: ScannerSymbol, action: string | null = null):
     pendingActions: new Set(action ? [action] : []),
     load: vi.fn(),
     selectCandidate: vi.fn(),
+    showLegacyImports: vi.fn(),
+    showCurrentCandidates: vi.fn(),
+    selectLegacyContext: vi.fn(),
     startSession: vi.fn(),
     importSample: vi.fn(),
     importCsv: vi.fn(),
@@ -109,6 +117,81 @@ describe("filterScannerCandidates", () => {
 });
 
 describe("scanner workspace", () => {
+  test("shows Legacy Imports as reference-only evidence without Candidate actions", async () => {
+    const user = userEvent.setup();
+    const legacyImport: LegacyImport = {
+      id: 1,
+      label: "Legacy Import",
+      reference_only: true,
+      actionable: false,
+      ticker: "KEEP",
+      price: 2.35,
+      gap_pct: 42,
+      rel_volume: 18.4,
+      float_m: 8.2,
+      market_cap_m: 21,
+      spread_pct: 0.9,
+      catalyst_type: "FDA",
+      above_vwap: true,
+      news_headline: "Known headline",
+      clean_daily_chart_room: true,
+      holding_key_level: false,
+      no_dilution_red_flag: true,
+      legacy_status: "watch",
+      data_origin: "manual_import",
+      original_created_at: "2026-07-31T10:00:00Z",
+      original_updated_at: "2026-07-31T10:05:00Z",
+      source_provenance: null,
+      trading_date: null,
+      market_phase: null,
+      source_timestamp: null,
+    };
+    const remote: ScannerRemote = {
+      listCandidates: vi.fn().mockResolvedValue([buildCandidate()]),
+      listLegacyImports: vi.fn().mockResolvedValue([legacyImport]),
+      listSessions: vi.fn().mockResolvedValue([]),
+      getSession: vi.fn(),
+      importSampleCandidates: vi.fn(),
+      startSession: vi.fn(),
+      importCandidatesCsv: vi.fn(),
+      updateCandidateStatus: vi.fn(),
+    };
+
+    function Harness() {
+      const workspace = useScannerWorkspace(remote, {
+        minimumScore: 65,
+        watchedTickers: new Set(),
+      });
+      return createElement(ScannerWorkspace, {
+        workspace,
+        loading: false,
+        watchedTickers: new Set<string>(),
+        maxSpreadPct: 1.5,
+        onRun: vi.fn(),
+        onSelect: vi.fn(),
+        onToggleWatch: vi.fn(),
+        onIgnore: vi.fn(),
+        candidateResearch: createElement("div", null, "Candidate research actions"),
+      });
+    }
+
+    render(createElement(Harness));
+    await user.click(screen.getByRole("button", { name: "Legacy Imports" }));
+
+    expect(await screen.findByRole("heading", { name: "Legacy Imports" })).toBeInTheDocument();
+    expect(screen.getByText("Reference only · Not actionable")).toBeInTheDocument();
+    expect(screen.getByText("KEEP")).toBeInTheDocument();
+    expect(screen.getAllByText("Unknown")).toHaveLength(4);
+    expect(screen.queryByText("Candidate research actions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /KEEP.*watchlist/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ignore KEEP" })).not.toBeInTheDocument();
+    expect(remote.listLegacyImports).toHaveBeenCalledTimes(1);
+    expect(remote.listLegacyImports).toHaveBeenCalledWith("operational");
+
+    await user.click(screen.getByRole("button", { name: "Demo imports" }));
+    await waitFor(() => expect(remote.listLegacyImports).toHaveBeenCalledWith("demo"));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -142,6 +225,7 @@ describe("scanner workspace", () => {
     const csvImport = deferred<ScannerSymbol[]>();
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
+      listLegacyImports: vi.fn().mockResolvedValue([]),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi.fn(),
       importSampleCandidates: vi.fn(() => sampleImport.promise),
@@ -181,6 +265,7 @@ describe("scanner workspace", () => {
     const session = buildSession();
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
+      listLegacyImports: vi.fn().mockResolvedValue([]),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi
         .fn()

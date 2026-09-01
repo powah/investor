@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Eye, EyeOff, Play, RefreshCw, Search } from "lucide-react";
 import { currency, number } from "@/lib/api";
-import type { ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
 
 export type ScannerFilter = "all" | "qualified" | "watching" | "caution";
 
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
+  listLegacyImports(context: "operational" | "demo"): Promise<LegacyImport[]>;
   listSessions(): Promise<ScannerSession[]>;
   getSession(sessionId: number): Promise<ScannerSession>;
   importSampleCandidates(): Promise<ScannerSymbol[]>;
@@ -63,6 +64,10 @@ export function useScannerWorkspace(
 ) {
   const [candidates, setCandidates] = useState<ScannerSymbol[]>([]);
   const [sessions, setSessions] = useState<ScannerSession[]>([]);
+  const [legacyImports, setLegacyImports] = useState<LegacyImport[]>([]);
+  const [legacyImportsError, setLegacyImportsError] = useState<string | null>(null);
+  const [scannerView, setScannerView] = useState<"current" | "legacy">("current");
+  const [legacyContext, setLegacyContext] = useState<"operational" | "demo">("operational");
   const [selectedTicker, setSelectedTicker] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ScannerFilter>("all");
@@ -146,6 +151,41 @@ export function useScannerWorkspace(
     setSelectedTicker(candidate.ticker);
   }, []);
 
+  const showLegacyImports = useCallback(async () => {
+    const actionId = "legacy-imports";
+    setScannerView("legacy");
+    beginAction(actionId);
+    setLegacyImportsError(null);
+    try {
+      setLegacyImports(await remote.listLegacyImports(legacyContext));
+    } catch (error) {
+      setLegacyImportsError(error instanceof Error ? error.message : "Legacy Imports could not be loaded.");
+    } finally {
+      endAction(actionId);
+    }
+  }, [beginAction, endAction, legacyContext, remote]);
+
+  const showCurrentCandidates = useCallback(() => {
+    setScannerView("current");
+  }, []);
+
+  const selectLegacyContext = useCallback(
+    async (context: "operational" | "demo") => {
+      const actionId = "legacy-imports";
+      setLegacyContext(context);
+      beginAction(actionId);
+      setLegacyImportsError(null);
+      try {
+        setLegacyImports(await remote.listLegacyImports(context));
+      } catch (error) {
+        setLegacyImportsError(error instanceof Error ? error.message : "Legacy Imports could not be loaded.");
+      } finally {
+        endAction(actionId);
+      }
+    },
+    [beginAction, endAction, remote],
+  );
+
   const startSession = useCallback(async () => {
     const actionId = "scanner-session";
     beginAction(actionId);
@@ -213,6 +253,10 @@ export function useScannerWorkspace(
   return {
     candidates,
     sessions,
+    legacyImports,
+    legacyImportsError,
+    scannerView,
+    legacyContext,
     selectedTicker,
     selectedCandidate,
     displayedSession,
@@ -224,6 +268,9 @@ export function useScannerWorkspace(
     pendingActions,
     load,
     selectCandidate,
+    showLegacyImports,
+    showCurrentCandidates,
+    selectLegacyContext,
     startSession,
     importSample,
     importCsv,
@@ -254,39 +301,154 @@ export function ScannerWorkspace({
   onIgnore: (symbol: ScannerSymbol) => Promise<void>;
   candidateResearch: ReactNode;
 }) {
+  const showingLegacyImports = workspace.scannerView === "legacy";
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <div className={`grid gap-5 ${showingLegacyImports ? "" : "xl:grid-cols-[minmax(0,1fr)_380px]"}`}>
       <div className="min-w-0 space-y-4">
         <PageHeading
           eyebrow="Step 1 · Discover"
           title="Scanner"
           description="Prioritize catalyst-driven movers, then inspect the score and risk evidence before watching a name."
         />
-        <ScannerSessionPanel
-          scannerSession={workspace.displayedSession}
-          starting={workspace.pendingActions.has("scanner-session")}
-          onRun={onRun}
-        />
-        <ScannerToolbar
-          search={workspace.search}
-          setSearch={workspace.setSearch}
-          filter={workspace.filter}
-          setFilter={workspace.setFilter}
-          resultCount={workspace.filteredCandidates.length}
-        />
-        <ScannerTable
-          symbols={workspace.filteredCandidates}
-          loading={loading}
-          selectedTicker={workspace.selectedTicker}
-          watchedTickers={watchedTickers}
-          pendingActions={workspace.pendingActions}
-          maxSpreadPct={maxSpreadPct}
-          onSelect={onSelect}
-          onToggleWatch={onToggleWatch}
-          onIgnore={onIgnore}
-        />
+        <div className="flex gap-2" aria-label="Scanner data views">
+          <button
+            className={showingLegacyImports ? "text-button" : "secondary-active-button"}
+            type="button"
+            aria-pressed={!showingLegacyImports}
+            onClick={workspace.showCurrentCandidates}
+          >
+            Current research
+          </button>
+          <button
+            className={showingLegacyImports ? "secondary-active-button" : "text-button"}
+            type="button"
+            aria-pressed={showingLegacyImports}
+            onClick={() => void workspace.showLegacyImports()}
+          >
+            Legacy Imports
+          </button>
+        </div>
+        {showingLegacyImports ? (
+          <LegacyImportsView workspace={workspace} />
+        ) : (
+          <>
+            <ScannerSessionPanel
+              scannerSession={workspace.displayedSession}
+              starting={workspace.pendingActions.has("scanner-session")}
+              onRun={onRun}
+            />
+            <ScannerToolbar
+              search={workspace.search}
+              setSearch={workspace.setSearch}
+              filter={workspace.filter}
+              setFilter={workspace.setFilter}
+              resultCount={workspace.filteredCandidates.length}
+            />
+            <ScannerTable
+              symbols={workspace.filteredCandidates}
+              loading={loading}
+              selectedTicker={workspace.selectedTicker}
+              watchedTickers={watchedTickers}
+              pendingActions={workspace.pendingActions}
+              maxSpreadPct={maxSpreadPct}
+              onSelect={onSelect}
+              onToggleWatch={onToggleWatch}
+              onIgnore={onIgnore}
+            />
+          </>
+        )}
       </div>
-      {candidateResearch}
+      {!showingLegacyImports && candidateResearch}
+    </div>
+  );
+}
+
+function LegacyImportsView({ workspace }: { workspace: ScannerWorkspaceController }) {
+  const unknown = (value: string | null) => value ?? "Unknown";
+  return (
+    <section className="panel overflow-hidden rounded-xl" aria-label="Legacy Imports reference view">
+      <div className="flex flex-col gap-3 border-b border-line p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-ink">Legacy Imports</h3>
+          <p className="mt-1 text-sm font-medium text-amber-800">Reference only · Not actionable</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Retained from the pre-session scanner. These rows cannot become Candidates or enter the Focus View.
+          </p>
+        </div>
+        <div className="flex gap-2" aria-label="Legacy Import context">
+          {(["operational", "demo"] as const).map((context) => (
+            <button
+              key={context}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold capitalize ${
+                workspace.legacyContext === context ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+              type="button"
+              aria-pressed={workspace.legacyContext === context}
+              disabled={workspace.pendingActions.has("legacy-imports")}
+              onClick={() => void workspace.selectLegacyContext(context)}
+            >
+              {context === "operational" ? "Operational imports" : "Demo imports"}
+            </button>
+          ))}
+        </div>
+      </div>
+      {workspace.pendingActions.has("legacy-imports") ? (
+        <div className="px-4 py-12 text-center text-sm text-slate-500">Loading Legacy Imports…</div>
+      ) : workspace.legacyImportsError ? (
+        <div className="px-4 py-12 text-center text-sm text-red-700" role="alert">{workspace.legacyImportsError}</div>
+      ) : workspace.legacyImports.length === 0 ? (
+        <div className="px-4 py-12 text-center text-sm text-slate-500">No Legacy Imports in this context.</div>
+      ) : (
+        <div className="divide-y divide-line">
+          {workspace.legacyImports.map((item) => (
+            <article key={item.id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-semibold text-blue-800">{item.ticker}</span>
+                    <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+                      {item.label}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">{item.news_headline ?? "No headline retained"}</p>
+                </div>
+                <div className="text-right text-sm">
+                  <div className="font-semibold text-ink">{currency(item.price)}</div>
+                  <div className="text-xs text-slate-500">Original state: {item.legacy_status}</div>
+                </div>
+              </div>
+              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <LegacyFact label="Gap" value={`${number(item.gap_pct, 1)}%`} />
+                <LegacyFact label="Relative volume" value={`${number(item.rel_volume, 1)}×`} />
+                <LegacyFact label="Float" value={`${number(item.float_m, 1)}M`} />
+                <LegacyFact label="Market cap" value={`${number(item.market_cap_m, 1)}M`} />
+                <LegacyFact label="Spread" value={`${number(item.spread_pct, 1)}%`} />
+                <LegacyFact label="Catalyst type" value={item.catalyst_type ?? "None retained"} />
+                <LegacyFact label="Above VWAP" value={item.above_vwap ? "Yes" : "No"} />
+                <LegacyFact label="Chart room" value={item.clean_daily_chart_room ? "Yes" : "No"} />
+                <LegacyFact label="Holding key level" value={item.holding_key_level ? "Yes" : "No"} />
+                <LegacyFact label="No dilution flag" value={item.no_dilution_red_flag ? "Yes" : "No"} />
+                <LegacyFact label="Data origin" value={item.data_origin} />
+                <LegacyFact label="Original created" value={new Date(item.original_created_at).toLocaleString()} />
+                <LegacyFact label="Original updated" value={new Date(item.original_updated_at).toLocaleString()} />
+                <LegacyFact label="Trading Date" value={unknown(item.trading_date)} />
+                <LegacyFact label="Market Phase" value={unknown(item.market_phase)} />
+                <LegacyFact label="Source provenance" value={unknown(item.source_provenance)} />
+                <LegacyFact label="Source timestamp" value={unknown(item.source_timestamp)} />
+              </dl>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LegacyFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+      <dd className="mt-1 text-slate-800">{value}</dd>
     </div>
   );
 }
