@@ -119,20 +119,34 @@ def _listing(
         db.flush()
         return listing, False
 
-    conflicts = any(
-        existing != observed
-        for existing, observed in (
-            (listing.status, status),
-            (listing.instrument_type, instrument_type),
-            (listing.effective_to, item.effective_to),
-            (listing.foreign_issuer, item.foreign_issuer),
-            (
-                listing.depositary_to_underlying_ratio,
-                item.depositary_to_underlying_ratio,
-            ),
-        )
+    required_conflict = (
+        listing.status != status or listing.instrument_type != instrument_type
     )
-    return (None if conflicts else listing), conflicts
+    optional_observations = (
+        ("effective_to", item.effective_to),
+        ("foreign_issuer", item.foreign_issuer),
+        (
+            "depositary_to_underlying_ratio",
+            item.depositary_to_underlying_ratio,
+        ),
+    )
+    optional_conflict = any(
+        observed is not None
+        and getattr(listing, attribute) is not None
+        and getattr(listing, attribute) != observed
+        for attribute, observed in optional_observations
+    )
+    if required_conflict or optional_conflict:
+        return None, True
+
+    enriched = False
+    for attribute, observed in optional_observations:
+        if getattr(listing, attribute) is None and observed is not None:
+            setattr(listing, attribute, observed)
+            enriched = True
+    if enriched:
+        db.flush()
+    return listing, False
 
 
 def _admission(
@@ -167,16 +181,15 @@ def _admission(
         return "unresolved", unresolved
 
     rejected: list[str] = []
+    effective_from = listing.effective_from if listing is not None else item.effective_from
+    effective_to = listing.effective_to if listing is not None else item.effective_to
     if exchange not in ELIGIBLE_EXCHANGES:
         rejected.append("unsupported_exchange")
     if status != "active":
         rejected.append("listing_not_active")
-    if (
-        item.effective_from is not None
-        and (
-            item.effective_from > trading_date
-            or (item.effective_to is not None and item.effective_to < trading_date)
-        )
+    if effective_from is not None and (
+        effective_from > trading_date
+        or (effective_to is not None and effective_to < trading_date)
     ):
         rejected.append("listing_not_active_on_trading_date")
     if instrument_type not in ELIGIBLE_INSTRUMENT_TYPES:

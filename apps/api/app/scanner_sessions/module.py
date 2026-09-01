@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Mapping
 from uuid import uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -36,6 +36,7 @@ from app.schemas.scanner_sessions import (
     ScannerSessionDiagnosticRead,
     ScannerSessionProgressRead,
     ScannerSessionRead,
+    ScannerSessionSummaryRead,
     SecurityRead,
     SupplementaryDiscoveryInput,
 )
@@ -75,6 +76,15 @@ class ScannerSessionNotFound(LookupError):
     pass
 
 
+class ScannerSessionActive(RuntimeError):
+    def __init__(self, session_id: int):
+        self.session_id = session_id
+        super().__init__(
+            f"Scanner Session {session_id} is already running; supplementary inputs "
+            "were not accepted."
+        )
+
+
 class _ScannerRunOwnershipLost(RuntimeError):
     pass
 
@@ -101,6 +111,8 @@ class ScannerSessions:
         with self._session_factory() as db:
             active = self._active(db)
             if active is not None:
+                if supplementary_inputs:
+                    raise ScannerSessionActive(active.id)
                 return self._read(active)
 
             started_at = self._clock()
@@ -146,6 +158,8 @@ class ScannerSessions:
                 active = self._active(db)
                 if active is None:
                     raise
+                if supplementary_inputs:
+                    raise ScannerSessionActive(active.id)
                 return self._read(active)
             db.refresh(session)
             session_id = session.id
@@ -156,16 +170,53 @@ class ScannerSessions:
         task.add_done_callback(self._tasks.discard)
         return result
 
-    def list(self) -> list[ScannerSessionRead]:
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ScannerSessionSummaryRead]:
         self.recover_interrupted()
         with self._session_factory() as db:
-            sessions = (
-                db.query(ScannerSession)
-                .options(*self._load_options())
+            diagnostics_count = (
+                db.query(func.count(ScannerSessionDiagnostic.id))
+                .filter(ScannerSessionDiagnostic.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            discovery_hits_count = (
+                db.query(func.count(DiscoveryHit.id))
+                .filter(DiscoveryHit.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            candidates_count = (
+                db.query(func.count(ScannerSessionCandidate.id))
+                .filter(ScannerSessionCandidate.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            rows = (
+                db.query(
+                    ScannerSession,
+                    diagnostics_count.label("diagnostics_count"),
+                    discovery_hits_count.label("discovery_hits_count"),
+                    candidates_count.label("candidates_count"),
+                )
                 .order_by(ScannerSession.started_at.desc(), ScannerSession.id.desc())
+                .offset(offset)
+                .limit(limit)
                 .all()
             )
-            return [self._read(session) for session in sessions]
+            return [
+                self._summary_read(
+                    session,
+                    diagnostics_count=diagnostic_total,
+                    discovery_hits_count=hit_total,
+                    candidates_count=candidate_total,
+                )
+                for session, diagnostic_total, hit_total, candidate_total in rows
+            ]
 
     def get(self, session_id: int) -> ScannerSessionRead:
         self.recover_interrupted()
@@ -413,6 +464,36 @@ class ScannerSessions:
             effective_to=listing.effective_to,
             foreign_issuer=listing.foreign_issuer,
             depositary_to_underlying_ratio=listing.depositary_to_underlying_ratio,
+        )
+
+    @staticmethod
+    def _summary_read(
+        session: ScannerSession,
+        *,
+        diagnostics_count: int,
+        discovery_hits_count: int,
+        candidates_count: int,
+    ) -> ScannerSessionSummaryRead:
+        total = session.progress_total
+        percent = round((session.progress_completed / total) * 100) if total else 0
+        return ScannerSessionSummaryRead(
+            id=session.id,
+            status=session.status,
+            stage=session.stage,
+            started_at=session.started_at,
+            completed_at=session.completed_at,
+            trading_date=session.trading_date,
+            market_phase=session.market_phase,
+            scanner_policy_version=session.scanner_policy_version,
+            scoring_model_version=session.scoring_model_version,
+            progress=ScannerSessionProgressRead(
+                completed=session.progress_completed,
+                total=total,
+                percent=percent,
+            ),
+            diagnostics_count=diagnostics_count,
+            discovery_hits_count=discovery_hits_count,
+            candidates_count=candidates_count,
         )
 
     @classmethod

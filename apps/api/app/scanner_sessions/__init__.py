@@ -10,7 +10,11 @@ from app.scanner_sessions.domain import (
     MarketMovementDiscovery,
     resolve_exchange_session_identity,
 )
-from app.scanner_sessions.module import ScannerSessionNotFound, ScannerSessions
+from app.scanner_sessions.module import (
+    ScannerSessionActive,
+    ScannerSessionNotFound,
+    ScannerSessions,
+)
 
 
 @lru_cache
@@ -27,6 +31,7 @@ __all__ = [
     "DiscoveryUnavailable",
     "ExchangeSessionIdentity",
     "MarketMovementDiscovery",
+    "ScannerSessionActive",
     "ScannerSessionNotFound",
     "ScannerSessions",
     "get_scanner_sessions",

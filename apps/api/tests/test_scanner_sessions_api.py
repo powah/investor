@@ -20,6 +20,10 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.api.scanner_sessions import router
+from app.scanner_sessions.supplementary_csv import (
+    MAX_SUPPLEMENTARY_CSV_BYTES,
+    MAX_SUPPLEMENTARY_INPUTS,
+)
 from app.scanner_sessions import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -191,8 +195,24 @@ def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic
     ]
     assert discovery.calls == 1
 
-    history = client.get("/scanner-sessions").json()
-    assert history[0] == completed
+    history = client.get("/scanner-sessions?limit=1").json()
+    assert history == [
+        {
+            "id": completed["id"],
+            "status": "completed",
+            "stage": "completed",
+            "started_at": "2026-07-06T13:45:00Z",
+            "completed_at": "2026-07-06T13:45:00Z",
+            "trading_date": "2026-07-06",
+            "market_phase": "regular",
+            "scanner_policy_version": "scanner-policy-v1",
+            "scoring_model_version": "scoring-model-v1",
+            "progress": {"completed": 1, "total": 1, "percent": 100},
+            "diagnostics_count": 1,
+            "discovery_hits_count": 0,
+            "candidates_count": 0,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -220,9 +240,12 @@ def test_repeated_and_concurrent_starts_return_one_active_session(scanner_client
     repeated = client.post(
         "/scanner-sessions",
         json={"supplementary_inputs": [_supplementary_input()]},
-    ).json()
-    assert repeated["id"] == sessions[0]["id"]
-    assert repeated["discovery_hits"] == []
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"] == (
+        f"Scanner Session {sessions[0]['id']} is already running; supplementary inputs "
+        "were not accepted."
+    )
     assert discovery.calls == 1
 
     discovery.release.set()
@@ -419,6 +442,86 @@ def test_ticker_changes_reuse_security_while_ticker_reuse_does_not_merge_history
     assert first["candidates"][0]["observed_listings"][0]["ticker"] == "OLD"
 
 
+def test_session_history_is_paginated_and_returns_summaries(scanner_client):
+    client, _ = scanner_client
+    first = client.post("/scanner-sessions").json()
+    _wait_for_terminal(client, first["id"])
+    second = client.post("/scanner-sessions").json()
+    _wait_for_terminal(client, second["id"])
+
+    first_page = client.get("/scanner-sessions?limit=1").json()
+    second_page = client.get("/scanner-sessions?limit=1&offset=1").json()
+
+    assert [item["id"] for item in first_page] == [second["id"]]
+    assert [item["id"] for item in second_page] == [first["id"]]
+    assert "diagnostics" not in first_page[0]
+    assert "discovery_hits" not in first_page[0]
+    assert "candidates" not in first_page[0]
+
+
+def test_optional_listing_metadata_can_be_omitted_or_enriched_without_a_conflict(scanner_client):
+    client, _ = scanner_client
+    known_ratio = _supplementary_input(
+        ticker="ABVC",
+        security_identifier="optional-known-first",
+        exchange="NYSE American",
+        instrument_type="american_depositary_share",
+        foreign_issuer=True,
+        depositary_to_underlying_ratio=2.5,
+    )
+    first = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [known_ratio]}
+    ).json()
+    _wait_for_terminal(client, first["id"])
+
+    omitted_ratio = {**known_ratio, "depositary_to_underlying_ratio": None}
+    second = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [omitted_ratio]}
+    ).json()
+    assert second["discovery_hits"][0]["admission_outcome"] == "admitted"
+    assert second["discovery_hits"][0]["listing"]["depositary_to_underlying_ratio"] == 2.5
+    _wait_for_terminal(client, second["id"])
+
+    unknown_first = {
+        **known_ratio,
+        "security_identifier": "optional-enriched-later",
+        "depositary_to_underlying_ratio": None,
+    }
+    third = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [unknown_first]}
+    ).json()
+    assert third["discovery_hits"][0]["admission_outcome"] == "admitted"
+    _wait_for_terminal(client, third["id"])
+
+    learned_later = {**unknown_first, "depositary_to_underlying_ratio": 3.0}
+    fourth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [learned_later]}
+    ).json()
+    assert fourth["discovery_hits"][0]["admission_outcome"] == "admitted"
+    assert fourth["discovery_hits"][0]["listing"]["depositary_to_underlying_ratio"] == 3.0
+    _wait_for_terminal(client, fourth["id"])
+
+    expired = _supplementary_input(
+        ticker="OLD",
+        security_identifier="known-effective-end",
+        effective_to="2026-07-05",
+    )
+    fifth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [expired]}
+    ).json()
+    assert fifth["discovery_hits"][0]["admission_outcome"] == "rejected"
+    _wait_for_terminal(client, fifth["id"])
+
+    omitted_effective_end = {**expired, "effective_to": None}
+    sixth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [omitted_effective_end]}
+    ).json()
+    assert sixth["discovery_hits"][0]["admission_outcome"] == "rejected"
+    assert sixth["discovery_hits"][0]["admission_reasons"] == [
+        "listing_not_active_on_trading_date"
+    ]
+
+
 def test_supplementary_csv_records_provenance_and_unresolved_identity(scanner_client):
     client, _ = scanner_client
     csv_text = "\n".join(
@@ -442,6 +545,91 @@ def test_supplementary_csv_records_provenance_and_unresolved_identity(scanner_cl
         "supplementary.csv:3",
     ]
     assert [hit["admission_outcome"] for hit in hits] == ["admitted", "unresolved"]
+
+
+def test_supplementary_csv_uses_logical_rows_for_multiline_provenance(scanner_client):
+    client, _ = scanner_client
+    csv_text = (
+        'ticker,discovery_reason\n'
+        'ALFA,"First line\nsecond line"\n'
+        'BETA,Second record\n'
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("multiline.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 202
+    assert [hit["source_reference"] for hit in response.json()["discovery_hits"]] == [
+        "multiline.csv:2",
+        "multiline.csv:3",
+    ]
+
+
+def test_supplementary_inputs_reject_non_finite_ratios(scanner_client):
+    client, _ = scanner_client
+
+    response = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(depositary_to_underlying_ratio="Infinity")
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+
+    csv_response = client.post(
+        "/scanner-sessions/import-csv",
+        files={
+            "file": (
+                "non-finite.csv",
+                b"ticker,depositary_to_underlying_ratio\nSINT,inf\n",
+                "text/csv",
+            )
+        },
+    )
+    assert csv_response.status_code == 422
+
+
+def test_supplementary_csv_rejects_oversized_uploads(scanner_client):
+    client, _ = scanner_client
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={
+            "file": (
+                "oversized.csv",
+                b"ticker\n" + b"A" * MAX_SUPPLEMENTARY_CSV_BYTES,
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+
+
+def test_supplementary_csv_applies_the_json_input_count_limit(scanner_client):
+    client, _ = scanner_client
+    csv_text = "ticker\n" + "\n".join(
+        f"ROW{index}" for index in range(MAX_SUPPLEMENTARY_INPUTS + 1)
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("too-many.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["errors"] == [
+        {
+            "row": MAX_SUPPLEMENTARY_INPUTS + 2,
+            "field": "rows",
+            "message": f"At most {MAX_SUPPLEMENTARY_INPUTS} data rows are allowed.",
+        }
+    ]
 
 
 @pytest.mark.parametrize(

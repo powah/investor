@@ -3,11 +3,18 @@ from __future__ import annotations
 import csv
 from collections import Counter
 from datetime import date
+from math import isfinite
 from io import StringIO
 
 from pydantic import ValidationError
 
-from app.schemas.scanner_sessions import SupplementaryDiscoveryInput
+from app.schemas.scanner_sessions import (
+    MAX_SUPPLEMENTARY_INPUTS,
+    SupplementaryDiscoveryInput,
+)
+
+
+MAX_SUPPLEMENTARY_CSV_BYTES = 5 * 1024 * 1024
 
 
 class SupplementaryCsvError(ValueError):
@@ -57,7 +64,7 @@ def _ratio(value: str | None, *, row: int, errors: list[dict[str, object]]) -> f
     except ValueError:
         errors.append(_error(row, "depositary_to_underlying_ratio", "Use a positive number or leave blank."))
         return None
-    if ratio <= 0:
+    if not isfinite(ratio) or ratio <= 0:
         errors.append(_error(row, "depositary_to_underlying_ratio", "Use a positive number or leave blank."))
         return None
     return ratio
@@ -91,14 +98,32 @@ def parse_supplementary_csv(content: bytes, *, filename: str) -> list[Supplement
     reader.fieldnames = headers
 
     inputs: list[SupplementaryDiscoveryInput] = []
+    logical_row = 1
+    data_rows = 0
     try:
-        for raw in reader:
-            row = reader.line_num
+        for logical_row, raw in enumerate(reader, start=2):
+            data_rows += 1
+            if data_rows > MAX_SUPPLEMENTARY_INPUTS:
+                errors.append(
+                    _error(
+                        logical_row,
+                        "rows",
+                        f"At most {MAX_SUPPLEMENTARY_INPUTS} data rows are allowed.",
+                    )
+                )
+                break
             if raw.get(None):
-                errors.append(_error(row, "row", "The row contains more values than the header defines."))
+                errors.append(
+                    _error(
+                        logical_row,
+                        "row",
+                        "The row contains more values than the header defines.",
+                    )
+                )
                 continue
             if all(value is None or not value.strip() for value in raw.values()):
                 continue
+            row = logical_row
             row_error_count = len(errors)
             ticker = (raw.get("ticker") or "").strip()
             if not ticker:
@@ -142,7 +167,7 @@ def parse_supplementary_csv(content: bytes, *, filename: str) -> list[Supplement
                         )
                     )
     except csv.Error as exc:
-        errors.append(_error(reader.line_num or None, "row", f"Malformed CSV: {exc}."))
+        errors.append(_error(logical_row, "row", f"Malformed CSV: {exc}."))
 
     if errors:
         raise SupplementaryCsvError(errors)

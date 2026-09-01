@@ -13,6 +13,9 @@ from app.scanner_session_types import (
 )
 
 
+MAX_SUPPLEMENTARY_INPUTS = 1000
+
+
 class SupplementaryDiscoveryInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -30,7 +33,9 @@ class SupplementaryDiscoveryInput(BaseModel):
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     foreign_issuer: Optional[bool] = None
-    depositary_to_underlying_ratio: Optional[float] = Field(default=None, gt=0)
+    depositary_to_underlying_ratio: Optional[float] = Field(
+        default=None, gt=0, allow_inf_nan=False
+    )
 
     @field_validator("observed_at")
     @classmethod
@@ -42,7 +47,7 @@ class SupplementaryDiscoveryInput(BaseModel):
 
 class ScannerSessionStart(BaseModel):
     supplementary_inputs: list[SupplementaryDiscoveryInput] = Field(
-        default_factory=list, max_length=1000
+        default_factory=list, max_length=MAX_SUPPLEMENTARY_INPUTS
     )
 
 
@@ -118,6 +123,22 @@ class ScannerSessionDiagnosticRead(BaseModel):
     details: dict[str, Any]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
+
+
+class ScannerSessionSummaryRead(BaseModel):
+    id: int
+    status: ScannerSessionStatus
+    stage: ScannerSessionStage
+    started_at: datetime
+    completed_at: Optional[datetime]
+    trading_date: date
+    market_phase: MarketPhase
+    scanner_policy_version: str
+    scoring_model_version: str
+    progress: ScannerSessionProgressRead
+    diagnostics_count: int
+    discovery_hits_count: int
+    candidates_count: int
 
 
 class ScannerSessionRead(BaseModel):

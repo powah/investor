@@ -10,7 +10,7 @@ import {
   type ScannerWorkspaceController,
 } from "@/modules/trading-dashboard/scanner/scanner-workspace";
 import { buildCandidate } from "@/test/fixtures";
-import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSessionSummary, ScannerSymbol } from "@/types/trading";
 
 function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
   return {
@@ -28,6 +28,26 @@ function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
     diagnostics: [],
     discovery_hits: [],
     candidates: [],
+    ...overrides,
+  };
+}
+
+function buildSessionSummary(overrides: Partial<ScannerSessionSummary> = {}): ScannerSessionSummary {
+  const session = buildSession();
+  return {
+    id: session.id,
+    status: session.status,
+    stage: session.stage,
+    started_at: session.started_at,
+    completed_at: session.completed_at,
+    trading_date: session.trading_date,
+    market_phase: session.market_phase,
+    scanner_policy_version: session.scanner_policy_version,
+    scoring_model_version: session.scoring_model_version,
+    progress: session.progress,
+    diagnostics_count: 0,
+    discovery_hits_count: 0,
+    candidates_count: 0,
     ...overrides,
   };
 }
@@ -323,6 +343,32 @@ describe("scanner workspace", () => {
 
     rerender(createElement(ScannerWorkspace, { ...props, workspace: buildWorkspace(candidate, "ALFA-ignore") }));
     expect(mobile.getByRole("button", { name: "Ignore ALFA" })).toBeDisabled();
+  });
+
+  test("loads paginated session summaries before fetching only the displayed session details", async () => {
+    const detailedSession = buildSession({ id: 7, status: "completed", stage: "completed" });
+    const remote: ScannerRemote = {
+      listCandidates: vi.fn().mockResolvedValue([]),
+      listLegacyImports: vi.fn().mockResolvedValue([]),
+      listSessions: vi.fn().mockResolvedValue([
+        buildSessionSummary({ id: 7, status: "completed", stage: "completed" }),
+      ]),
+      getSession: vi.fn().mockResolvedValue(detailedSession),
+      importSampleCandidates: vi.fn(),
+      startSession: vi.fn(),
+      importCandidatesCsv: vi.fn(),
+      updateCandidateStatus: vi.fn(),
+    };
+    const { result } = renderHook(() =>
+      useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }),
+    );
+
+    await act(async () => {
+      await result.current.load();
+    });
+
+    expect(remote.getSession).toHaveBeenCalledWith(7);
+    expect(result.current.sessions).toEqual([detailedSession]);
   });
 
   test("keeps concurrent scanner actions pending independently", async () => {

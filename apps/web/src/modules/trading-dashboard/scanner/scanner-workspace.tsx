@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Eye, EyeOff, Play, RefreshCw, Search } from "lucide-react";
 import { currency, number } from "@/lib/api";
-import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSessionSummary, ScannerSymbol } from "@/types/trading";
 
 export type ScannerFilter = "all" | "qualified" | "watching" | "caution";
 
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
   listLegacyImports(context: "operational" | "demo"): Promise<LegacyImport[]>;
-  listSessions(): Promise<ScannerSession[]>;
+  listSessions(): Promise<ScannerSessionSummary[]>;
   getSession(sessionId: number): Promise<ScannerSession>;
   importSampleCandidates(): Promise<ScannerSymbol[]>;
   startSession(): Promise<ScannerSession>;
@@ -85,10 +85,13 @@ export function useScannerWorkspace(
   }, []);
 
   const load = useCallback(async () => {
-    const [candidateData, sessionData] = await Promise.all([
+    const [candidateData, sessionSummaries] = await Promise.all([
       remote.listCandidates(),
       remote.listSessions(),
     ]);
+    const displayedSummary =
+      sessionSummaries.find((session) => session.status === "running") ?? sessionSummaries[0] ?? null;
+    const sessionData = displayedSummary ? [await remote.getSession(displayedSummary.id)] : [];
     setCandidates(candidateData);
     setSessions(sessionData);
     setSelectedTicker((current) => current || candidateData[0]?.ticker || "");
@@ -221,18 +224,15 @@ export function useScannerWorkspace(
       const actionId = "csv-import";
       beginAction(actionId);
       try {
-        const activeBeforeImport = sessions.find((session) => session.status === "running") ?? null;
         const scannerSession = await remote.importCandidatesCsv(file);
         setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
         await refresh();
-        return activeBeforeImport?.id === scannerSession.id
-          ? `Scanner Session #${scannerSession.id} was already running; ${file.name} was not attached.`
-          : `${file.name} attached to Scanner Session #${scannerSession.id} as supplementary discovery.`;
+        return `${file.name} attached to Scanner Session #${scannerSession.id} as supplementary discovery.`;
       } finally {
         endAction(actionId);
       }
     },
-    [beginAction, endAction, remote, sessions],
+    [beginAction, endAction, remote],
   );
 
   const updateStatus = useCallback(

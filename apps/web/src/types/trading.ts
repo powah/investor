@@ -132,6 +132,15 @@ export type ScannerSession = {
   candidates: ScannerSessionCandidate[];
 };
 
+export type ScannerSessionSummary = Omit<
+  ScannerSession,
+  "scanner_policy_settings" | "diagnostics" | "discovery_hits" | "candidates"
+> & {
+  diagnostics_count: number;
+  discovery_hits_count: number;
+  candidates_count: number;
+};
+
 export type WatchlistItem = {
   id: number;
   ticker: string;

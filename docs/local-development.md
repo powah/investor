@@ -178,7 +178,7 @@ ABVC,Foreign issuer catalyst,openfigi,BBG000ABVC00,Foreign Biotech Ltd,NYSE Amer
 MYST,Needs identity resolution,,,,,,,,,,
 ```
 
-The dashboard's **Import CSV** action submits UTF-8 supplementary discovery to a new Scanner Session. Only `ticker` is required, but a hit remains unresolved unless stable Security identity, Listing exchange/status/instrument classification, and effective date are supplied. Supported instruments are `common_stock` and `american_depositary_share`; missing fields are never guessed. CSV provenance includes the filename and row. Supplementary discovery cannot make a run completed when required Market-Movement Discovery fails.
+The dashboard's **Import CSV** action submits UTF-8 supplementary discovery to a new Scanner Session. Only `ticker` is required, but a hit remains unresolved unless stable Security identity, Listing exchange/status/instrument classification, and effective date are supplied. Supported instruments are `common_stock` and `american_depositary_share`; missing fields are never guessed. CSV provenance includes the filename and logical data-row number. Uploads are limited to 5 MiB and 1,000 rows. An import is rejected explicitly if another Scanner Session is already running, and supplementary discovery cannot make a run completed when required Market-Movement Discovery fails.
 
 The additive pre-session API at `/scanner/import-csv` still accepts the older scoring-input CSV shape while the workspace cutover is in progress. Those mutable rows are not Scanner Session Candidates.
 
