@@ -36,12 +36,12 @@ const riskSettings = buildRiskSettings();
 const riskState = buildRiskState();
 
 const analytics: Analytics = {
-  total_trades: 0,
-  win_rate: 0,
-  average_win: 0,
-  average_loss: 0,
-  net_pnl: 0,
-  average_r: 0,
+  total_trades: 3,
+  win_rate: 66.7,
+  average_win: 150,
+  average_loss: -75,
+  net_pnl: 225,
+  average_r: 1.25,
   best_catalyst_type: null,
   most_common_mistake: null,
 };
