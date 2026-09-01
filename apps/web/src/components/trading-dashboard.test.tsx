@@ -42,6 +42,27 @@ describe("TradingDashboard", () => {
     );
   });
 
+  test("keeps Watchlist note drafts across navigation and selects an available watched Candidate", async () => {
+    const user = userEvent.setup();
+    render(<TradingDashboard remote={new InMemoryDashboardRemote()} />);
+
+    const betaButtons = await screen.findAllByRole("button", { name: "BETA" });
+    await user.click(betaButtons[0]);
+    await user.click(screen.getByRole("tab", { name: /Watchlist/ }));
+
+    expect(screen.getByRole("heading", { name: "ALFA watch notes" })).toBeVisible();
+    const notes = screen.getByPlaceholderText(/Valid only above/);
+    await user.clear(notes);
+    await user.type(notes, "Draft: hold VWAP before entry.");
+
+    await user.click(screen.getByRole("tab", { name: /Analytics/ }));
+    await user.click(screen.getByRole("tab", { name: /Watchlist/ }));
+
+    expect(screen.getByPlaceholderText(/Valid only above/)).toHaveValue(
+      "Draft: hold VWAP before entry.",
+    );
+  });
+
   test("preserves an unfinished Risk Rules draft across workspace navigation", async () => {
     const user = userEvent.setup();
     render(<TradingDashboard remote={new InMemoryDashboardRemote()} />);
