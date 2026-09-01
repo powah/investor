@@ -25,7 +25,7 @@ From the repository root, copy the environment template:
 cp .env.example .env
 ```
 
-The backend targets Python 3.14, matching the CPython 3.14.6 API image in `apps/api/Dockerfile`. For host-side tests, create the environment with Python 3.14 rather than reusing an older `.venv`:
+The backend targets Python 3.14, matching the CPython 3.14.7 API image in `apps/api/Dockerfile`. For host-side tests, create the environment with Python 3.14 rather than reusing an older `.venv`:
 
 ```bash
 python3.14 -m venv .venv

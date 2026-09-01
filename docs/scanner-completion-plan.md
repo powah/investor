@@ -41,7 +41,7 @@ The first scanner-session milestone is manual-first:
 - Market, news, and SEC synchronization is manually triggered; there is no scanner scheduler.
 - There is no immutable scanner-session or replay model. Database changes are now managed by Alembic.
 - The Alpaca, SEC, and paper-broker integrations require local configuration before the current integration slice can be exercised. A read-only Alpaca capability probe records actual endpoint and feed access once paper credentials are present.
-- Frontend verification and the backend suite pass; the host backend environment now uses Python 3.14.6.
+- Frontend verification and the backend suite pass; the host backend environment now uses Python 3.14.7.
 - Guarded paper-execution infrastructure is further developed than daily scanner discovery. Scanner work should take priority over additional execution features.
 
 ## Data-source constraints
@@ -54,7 +54,7 @@ The first scanner-session milestone is manual-first:
 
 ## Phase 0: Stabilize the foundation
 
-**Status: Implemented.** Python 3.14.6 is installed for host verification, the backend suite
+**Status: Implemented.** Python 3.14.7 is installed for host verification, the backend suite
 runs in a recreated Python 3.14 virtual environment, Alembic owns schema changes, operational
 mode does not auto-seed sample candidates, and Operations can persist read-only Alpaca
 endpoint/feed capability checks. Actual account results still require the operator's local paper

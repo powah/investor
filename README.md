@@ -168,4 +168,4 @@ cd apps/api
 ../../.venv/bin/python -m pytest -q
 ```
 
-Python 3.14 is the supported backend development runtime; the API image is pinned to CPython 3.14.6. Recreate older virtual environments before installing the current dependency set.
+Python 3.14 is the supported backend development runtime; the API image is pinned to CPython 3.14.7. Recreate older virtual environments before installing the current dependency set.
