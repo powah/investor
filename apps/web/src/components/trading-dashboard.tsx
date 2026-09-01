@@ -31,10 +31,15 @@ import {
   CandidateResearchPanel,
   useCandidateResearch,
 } from "@/modules/trading-dashboard/candidate-research/candidate-research";
-import type { JournalDraft, RiskDraft } from "@/modules/trading-dashboard/contracts";
+import type { JournalDraft } from "@/modules/trading-dashboard/contracts";
 import { httpTradingDashboardRemote } from "@/modules/trading-dashboard/http-remote";
 import { OperationsWorkspace } from "@/modules/trading-dashboard/operations-workspace";
 import type { TradingDashboardRemote } from "@/modules/trading-dashboard/remote";
+import { RiskStatePanel } from "@/modules/trading-dashboard/risk/risk-presentation";
+import {
+  RiskRulesWorkspace,
+  useRiskRules,
+} from "@/modules/trading-dashboard/risk/risk-rules-workspace";
 import {
   ScannerWorkspace,
   useScannerWorkspace,
@@ -43,7 +48,6 @@ import type {
   Analytics,
   JournalEntry,
   RiskSettings,
-  RiskState,
   ScannerSymbol,
   TradePlan,
   WatchlistItem,
@@ -105,10 +109,6 @@ function apiMessage(error: unknown) {
   return "Request failed.";
 }
 
-function inputTime(value: string) {
-  return value.slice(0, 5);
-}
-
 function scoreTone(score: number) {
   if (score >= 80) {
     return "bg-teal-50 text-teal-800 ring-teal-200";
@@ -147,9 +147,6 @@ export function LegacyTradingDashboard(
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [activeView, setActiveView] = useState<WorkspaceView>("scanner");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [settings, setSettings] = useState<RiskSettings | null>(null);
-  const [riskDraft, setRiskDraft] = useState<RiskDraft | null>(null);
-  const [riskState, setRiskState] = useState<RiskState | null>(null);
   const [plans, setPlans] = useState<TradePlan[]>([]);
   const [journal, setJournal] = useState<JournalEntry[]>([]);
   const [analytics, setAnalytics] = useState<Analytics>(emptyAnalytics);
@@ -186,6 +183,9 @@ export function LegacyTradingDashboard(
   });
 
   const watchedTickers = useMemo(() => new Set(watchlist.map((item) => item.ticker)), [watchlist]);
+  const riskRules = useRiskRules(remote.riskRules);
+  const settings = riskRules.settings;
+  const riskState = riskRules.state;
   const scannerWorkspace = useScannerWorkspace(remote.scanner, {
     minimumScore: settings?.min_score_to_plan ?? 65,
     watchedTickers,
@@ -208,39 +208,21 @@ export function LegacyTradingDashboard(
 
   async function loadAll() {
     setError(null);
-    const [scannerData, , watchlistData, settingsData, riskStateData, planData, journalData, analyticsData] =
+    const [scannerData, , watchlistData, riskData, planData, journalData, analyticsData] =
       await Promise.all([
         scannerWorkspace.load(),
         candidateResearch.load(),
         remote.watchlist.listItems(),
-        remote.riskRules.getSettings(),
-        remote.riskRules.getState(),
+        riskRules.load(),
         remote.planner.listPlans(),
         remote.journal.listEntries(),
         remote.analytics.getSummary(),
       ]);
 
     setWatchlist(watchlistData);
-    setSettings(settingsData);
-    setRiskState(riskStateData);
     setPlans(planData);
     setJournal(journalData);
     setAnalytics(analyticsData);
-    setRiskDraft((current) =>
-      current ?? {
-        account_size: String(settingsData.account_size),
-        max_risk_per_trade_pct: String(settingsData.max_risk_per_trade_pct),
-        max_daily_loss: String(settingsData.max_daily_loss),
-        max_trades_per_day: String(settingsData.max_trades_per_day),
-        max_consecutive_losses: String(settingsData.max_consecutive_losses),
-        allowed_start_time: inputTime(settingsData.allowed_start_time),
-        allowed_end_time: inputTime(settingsData.allowed_end_time),
-        min_score_to_plan: String(settingsData.min_score_to_plan),
-        max_spread_pct: String(settingsData.max_spread_pct),
-        max_position_shares: String(settingsData.max_position_shares),
-        require_above_vwap: settingsData.require_above_vwap,
-      },
-    );
     setWatchNotes((current) => {
       const next = { ...current };
       watchlistData.forEach((item) => {
@@ -252,13 +234,13 @@ export function LegacyTradingDashboard(
     });
     setPlanDraft((current) => ({
       ...current,
-      account_size: current.account_size || String(settingsData.account_size),
-      max_risk_per_trade_pct: current.max_risk_per_trade_pct || String(settingsData.max_risk_per_trade_pct),
+      account_size: current.account_size || String(riskData.settings.account_size),
+      max_risk_per_trade_pct: current.max_risk_per_trade_pct || String(riskData.settings.max_risk_per_trade_pct),
     }));
 
     const firstTicker = scannerData[0]?.ticker ?? "";
     if (!scannerWorkspace.selectedTicker && firstTicker) {
-      selectTicker(scannerData[0], settingsData);
+      selectTicker(scannerData[0], riskData.settings);
     }
   }
 
@@ -448,19 +430,14 @@ export function LegacyTradingDashboard(
 
   async function saveRiskSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!riskDraft) {
-      return;
-    }
-
-    setSaving("settings");
     setError(null);
     try {
-      await remote.riskRules.updateSettings(riskDraft);
-      await refreshWithNotice("Risk settings saved.");
+      const message = await riskRules.save(loadAll);
+      if (message) {
+        setNotice(message);
+      }
     } catch (settingsError) {
       setError(apiMessage(settingsError));
-    } finally {
-      setSaving(null);
     }
   }
 
@@ -750,22 +727,7 @@ export function LegacyTradingDashboard(
           )}
 
           {activeView === "settings" && (
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-              <div className="min-w-0 space-y-4">
-                <PageHeading
-                  eyebrow="Guardrails"
-                  title="Risk rules"
-                  description="Set these limits before the session. Planner sizing and warnings use them as the source of truth."
-                />
-                {riskDraft && (
-                  <RiskSettingsPanel draft={riskDraft} setDraft={setRiskDraft} onSubmit={saveRiskSettings} saving={saving === "settings"} />
-                )}
-              </div>
-              <aside className="space-y-4">
-                <RiskPrinciplesPanel />
-                <RiskStatePanel state={riskState} settings={settings} />
-              </aside>
-            </div>
+            <RiskRulesWorkspace risk={riskRules} onSubmit={saveRiskSettings} />
           )}
         </section>
       </div>
@@ -908,31 +870,6 @@ function ReviewRow({ label, value, tone = "neutral" }: { label: string; value: s
       <span className="text-slate-500">{label}</span>
       <span className={`text-right font-semibold ${tone === "bad" ? "text-red-700" : "text-ink"}`}>{value}</span>
     </div>
-  );
-}
-
-function RiskPrinciplesPanel() {
-  const principles = [
-    "Every plan requires a stop before position sizing.",
-    "Daily loss and trade-count limits override opportunity.",
-    "Score prioritizes attention; it is never a buy signal.",
-    "Wide spreads, weak catalysts, and VWAP failures require review.",
-  ];
-  return (
-    <section className="panel rounded-xl p-4">
-      <div className="flex items-center gap-2">
-        <ShieldCheck className="h-5 w-5 text-teal-700" aria-hidden="true" />
-        <h3 className="font-semibold text-ink">Planning principles</h3>
-      </div>
-      <ul className="mt-4 space-y-3">
-        {principles.map((principle) => (
-          <li key={principle} className="flex gap-2 text-sm leading-6 text-slate-600">
-            <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-teal-600" aria-hidden="true" />
-            <span>{principle}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 
@@ -1248,44 +1185,6 @@ function JournalPanel({
   );
 }
 
-function RiskStatePanel({ state, settings }: { state: RiskState | null; settings: RiskSettings | null }) {
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <AlertTriangle className="h-4 w-4 text-amber-700" />
-        <h2 className="text-base font-semibold text-ink">Daily Risk</h2>
-      </div>
-      <div className="grid grid-cols-2 gap-3 px-4 py-4 text-sm">
-        <div>
-          <div className="label">Realized P&L</div>
-          <div className={state && state.daily_realized_pnl < 0 ? "mt-1 font-semibold text-red-700" : "mt-1 font-semibold text-teal-700"}>
-            {state ? currency(state.daily_realized_pnl) : "-"}
-          </div>
-        </div>
-        <div>
-          <div className="label">Loss room</div>
-          <div className="mt-1 font-semibold text-ink">{state ? currency(state.daily_loss_remaining) : "-"}</div>
-        </div>
-        <div>
-          <div className="label">Trades</div>
-          <div className="mt-1 font-semibold text-ink">
-            {state ? `${state.trades_today}/${state.max_trades_per_day}` : "-"}
-          </div>
-        </div>
-        <div>
-          <div className="label">Max risk</div>
-          <div className="mt-1 font-semibold text-ink">{settings ? `${settings.max_risk_per_trade_pct}%` : "-"}</div>
-        </div>
-      </div>
-      {state?.daily_lockout && (
-        <div className="border-t border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
-          Daily lockout: Max daily loss reached.
-        </div>
-      )}
-    </section>
-  );
-}
-
 function WatchlistPanel({
   items,
   watchedTickers,
@@ -1353,126 +1252,6 @@ function WatchlistPanel({
           </div>
         )}
       </div>
-    </section>
-  );
-}
-
-function RiskSettingsPanel({
-  draft,
-  setDraft,
-  onSubmit,
-  saving,
-}: {
-  draft: RiskDraft;
-  setDraft: React.Dispatch<React.SetStateAction<RiskDraft | null>>;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  saving: boolean;
-}) {
-  function patch(update: Partial<RiskDraft>) {
-    setDraft((current) => (current ? { ...current, ...update } : current));
-  }
-
-  return (
-    <section className="panel overflow-hidden rounded-xl">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <Settings className="h-4 w-4 text-blue-700" />
-        <h2 className="text-base font-semibold text-ink">Risk Settings</h2>
-      </div>
-      <form className="grid gap-3 px-4 py-4 sm:grid-cols-2" onSubmit={onSubmit}>
-        <Field label="Account size">
-          <input className="field" type="number" min="1" step="0.01" value={draft.account_size} onChange={(event) => patch({ account_size: event.target.value })} />
-        </Field>
-        <Field label="Risk %">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            max="100"
-            step="0.01"
-            value={draft.max_risk_per_trade_pct}
-            onChange={(event) => patch({ max_risk_per_trade_pct: event.target.value })}
-          />
-        </Field>
-        <Field label="Daily loss">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="0.01"
-            value={draft.max_daily_loss}
-            onChange={(event) => patch({ max_daily_loss: event.target.value })}
-          />
-        </Field>
-        <Field label="Max trades">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="1"
-            value={draft.max_trades_per_day}
-            onChange={(event) => patch({ max_trades_per_day: event.target.value })}
-          />
-        </Field>
-        <Field label="Max losses">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="1"
-            value={draft.max_consecutive_losses}
-            onChange={(event) => patch({ max_consecutive_losses: event.target.value })}
-          />
-        </Field>
-        <Field label="Min score">
-          <input
-            className="field"
-            type="number"
-            min="0"
-            max="100"
-            step="1"
-            value={draft.min_score_to_plan}
-            onChange={(event) => patch({ min_score_to_plan: event.target.value })}
-          />
-        </Field>
-        <Field label="Max spread %">
-          <input
-            className="field"
-            type="number"
-            min="0.01"
-            step="0.01"
-            value={draft.max_spread_pct}
-            onChange={(event) => patch({ max_spread_pct: event.target.value })}
-          />
-        </Field>
-        <Field label="Max shares">
-          <input
-            className="field"
-            type="number"
-            min="1"
-            step="1"
-            value={draft.max_position_shares}
-            onChange={(event) => patch({ max_position_shares: event.target.value })}
-          />
-        </Field>
-        <Field label="Start">
-          <input className="field" type="time" value={draft.allowed_start_time} onChange={(event) => patch({ allowed_start_time: event.target.value })} />
-        </Field>
-        <Field label="End">
-          <input className="field" type="time" value={draft.allowed_end_time} onChange={(event) => patch({ allowed_end_time: event.target.value })} />
-        </Field>
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
-          <input
-            type="checkbox"
-            checked={draft.require_above_vwap}
-            onChange={(event) => patch({ require_above_vwap: event.target.checked })}
-          />
-          Require VWAP confirmation
-        </label>
-        <button className="primary-button sm:col-span-2" type="submit" disabled={saving}>
-          <Save className="h-4 w-4" />
-          Save settings
-        </button>
-      </form>
     </section>
   );
 }

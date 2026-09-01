@@ -26,8 +26,8 @@ import type {
   CatalystDraft,
   JournalDraft,
   PromotionDraft,
-  RiskDraft,
 } from "./contracts";
+import { riskSettingsPayload } from "./risk/risk-rules-workspace";
 import type { TradingDashboardRemote } from "./remote";
 
 function optionalNumber(value: string) {
@@ -39,22 +39,6 @@ function catalystPayload(draft: CatalystDraft) {
     ...draft,
     ticker: draft.ticker.toUpperCase(),
     quality_score: Number(draft.quality_score),
-  };
-}
-
-function riskSettingsPayload(draft: RiskDraft) {
-  return {
-    account_size: Number(draft.account_size),
-    max_risk_per_trade_pct: Number(draft.max_risk_per_trade_pct),
-    max_daily_loss: Number(draft.max_daily_loss),
-    max_trades_per_day: Number(draft.max_trades_per_day),
-    max_consecutive_losses: Number(draft.max_consecutive_losses),
-    allowed_start_time: draft.allowed_start_time,
-    allowed_end_time: draft.allowed_end_time,
-    min_score_to_plan: Number(draft.min_score_to_plan),
-    max_spread_pct: Number(draft.max_spread_pct),
-    max_position_shares: Number(draft.max_position_shares),
-    require_above_vwap: draft.require_above_vwap,
   };
 }
 
