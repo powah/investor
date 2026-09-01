@@ -26,6 +26,34 @@ export type ScannerSymbol = {
   updated_at: string;
 };
 
+export type LegacyImport = {
+  id: number;
+  label: "Legacy Import";
+  reference_only: true;
+  actionable: false;
+  ticker: string;
+  price: number;
+  gap_pct: number;
+  rel_volume: number;
+  float_m: number;
+  market_cap_m: number;
+  spread_pct: number;
+  catalyst_type: string | null;
+  above_vwap: boolean;
+  news_headline: string | null;
+  clean_daily_chart_room: boolean;
+  holding_key_level: boolean;
+  no_dilution_red_flag: boolean;
+  legacy_status: string;
+  data_origin: string;
+  original_created_at: string;
+  original_updated_at: string;
+  source_provenance: string | null;
+  trading_date: string | null;
+  market_phase: string | null;
+  source_timestamp: string | null;
+};
+
 export type ScannerSessionDiagnostic = {
   source: string;
   capability: string;
