@@ -33,6 +33,7 @@ from app.schemas.scanner_sessions import (
     DiscoveryHitRead,
     ListingObservationRead,
     ListingRead,
+    NormalizedDiscoveryHit,
     ScannerSessionDiagnosticRead,
     ScannerSessionProgressRead,
     ScannerSessionRead,
@@ -59,6 +60,7 @@ class _ScannerRunFailure:
     code: str
     message: str
     details: Mapping[str, Any]
+    hits: tuple[NormalizedDiscoveryHit, ...] = ()
 
 
 _INTERRUPTED_FAILURE = _ScannerRunFailure(
@@ -284,6 +286,7 @@ class ScannerSessions:
                     code=exc.code,
                     message=exc.message,
                     details=exc.details,
+                    hits=exc.hits,
                 ),
             )
         except Exception as exc:
@@ -327,7 +330,17 @@ class ScannerSessions:
         session_id: int,
         discovery: MarketMovementDiscovery,
     ) -> DiscoveryResult:
-        discovery_task = asyncio.create_task(discovery.discover())
+        def report_progress(message: str, details: dict[str, Any]) -> None:
+            with self._session_factory() as db:
+                session = self._owned_active(db, session_id, for_update=True)
+                if session is None:
+                    raise _ScannerRunOwnershipLost
+                session.diagnostics[0].message = message
+                session.diagnostics[0].details = details
+                session.heartbeat_at = self._clock()
+                db.commit()
+
+        discovery_task = asyncio.create_task(discovery.discover(report_progress=report_progress))
         try:
             while True:
                 done, _ = await asyncio.wait(
@@ -370,6 +383,9 @@ class ScannerSessions:
             session = self._owned_active(db, session_id, for_update=True)
             if session is None:
                 return
+            admit_discovery_hits(db, session=session, inputs=failure.hits, observed_at=completed_at)
+            # Reload Candidates added by failed discovery before determining partial status.
+            db.expire(session, ["candidates"])
             self._mark_failed(
                 session,
                 failure=failure,
@@ -388,7 +404,7 @@ class ScannerSessions:
         diagnostic.status = failure.diagnostic_status
         diagnostic.code = failure.code
         diagnostic.message = failure.message
-        diagnostic.details = dict(failure.details)
+        diagnostic.details = {**diagnostic.details, **dict(failure.details)}
         diagnostic.completed_at = completed_at
         session.status = "partial" if session.candidates else "failed"
         session.stage = session.status
@@ -545,6 +561,7 @@ class ScannerSessions:
                     observed_at=hit.observed_at,
                     ticker=hit.ticker,
                     discovery_reason=hit.discovery_reason,
+                    provenance=hit.provenance,
                     observed_listing=cls._listing_observation_read(hit),
                     admission_outcome=hit.admission_outcome,
                     admission_reasons=hit.admission_reasons,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from typing import Any, Protocol
@@ -37,17 +38,22 @@ class DiscoveryResult:
 
 
 class DiscoveryUnavailable(RuntimeError):
-    def __init__(self, *, code: str, message: str, details: dict[str, Any] | None = None):
+    def __init__(self, *, code: str, message: str, details: dict[str, Any] | None = None,
+                 hits: tuple[NormalizedDiscoveryHit, ...] = ()):
         super().__init__(message)
         self.code = code
         self.message = message
         self.details = details or {}
+        self.hits = hits
+
+
+DiscoveryProgress = Callable[[str, dict[str, Any]], None]
 
 
 class MarketMovementDiscovery(Protocol):
     source: str
 
-    async def discover(self) -> DiscoveryResult:
+    async def discover(self, *, report_progress: DiscoveryProgress | None = None) -> DiscoveryResult:
         ...
 
 

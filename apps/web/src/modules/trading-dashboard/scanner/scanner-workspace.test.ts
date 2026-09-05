@@ -357,6 +357,34 @@ describe("scanner workspace", () => {
     expect(screen.getByText("Discovery completed with no hits · 0 Candidates.")).toBeInTheDocument();
   });
 
+  test.each(["running", "completed"] as const)("shows source selection and fallback badges while %s", (status) => {
+    render(createElement(ScannerWorkspace, {
+      workspace: {
+        ...buildWorkspace(buildCandidate()),
+        displayedSession: buildSession({
+          status,
+          diagnostics: [{
+            source: "capability_aware_market_movement", capability: "market_movement", required: true,
+            status, records_count: 0, code: null, message: "Using delayed consolidated bars",
+            started_at: null, completed_at: null,
+            details: { sources: {
+              movers: { source: "alpaca_movers", status: "completed", data_tier: "screener_consolidated" },
+              actives: { source: "alpaca_most_actives", status: "skipped", reason: "capability_not_verified" },
+              bars: { source: "alpaca_delayed_bars", status, reason: "screener_fallback", data_tier: "delayed_consolidated", expected_delay_seconds: 900 },
+            } },
+          }],
+        }),
+      },
+      loading: false, watchedTickers: new Set<string>(), maxSpreadPct: 1.5,
+      onRun: vi.fn(), onSelect: vi.fn(), onToggleWatch: vi.fn(), onIgnore: vi.fn(),
+      candidateResearch: null,
+    }));
+    const badges = screen.getByLabelText("Discovery source selection");
+    expect(badges).toHaveTextContent("alpaca_movers · completed · SIP screener · Delay not specified");
+    expect(badges).toHaveTextContent("alpaca_most_actives · skipped · capability not verified");
+    expect(badges).toHaveTextContent(`alpaca_delayed_bars · ${status} · screener fallback · Delayed consolidated · 15 min delay`);
+  });
+
   test("offers watch and ignore actions on mobile with desktop-equivalent saving guards", () => {
     const candidate = buildCandidate();
     const props = {

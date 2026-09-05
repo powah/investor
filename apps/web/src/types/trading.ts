@@ -94,6 +94,7 @@ export type DiscoveryHit = {
   observed_at: string;
   ticker: string;
   discovery_reason: string;
+  provenance?: Record<string, unknown>;
   observed_listing: Omit<ListingIdentity, "id" | "security_id">;
   admission_outcome: "admitted" | "rejected" | "unresolved";
   admission_reasons: string[];

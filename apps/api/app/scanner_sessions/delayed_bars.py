@@ -18,6 +18,7 @@ from app.core.config import Settings
 from app.models.scanner_sessions import Listing
 from app.scanner_sessions.admission import ELIGIBLE_EXCHANGES, ELIGIBLE_INSTRUMENT_TYPES
 from app.scanner_sessions.domain import (
+    DiscoveryProgress,
     DiscoveryResult,
     DiscoveryUnavailable,
     resolve_exchange_session_identity,
@@ -86,7 +87,7 @@ class AlpacaDelayedBarDiscovery:
         self._clock = clock
         self._started_at = started_at or clock()
 
-    async def discover(self) -> DiscoveryResult:
+    async def discover(self, *, report_progress: DiscoveryProgress | None = None) -> DiscoveryResult:
         if not self._settings.alpaca_configured:
             raise DiscoveryUnavailable(code="alpaca_not_configured", message="Configure Alpaca credentials for delayed consolidated Market-Movement Discovery.")
         if self._settings.alpaca_scanner_feed != "delayed_sip":
@@ -105,6 +106,7 @@ class AlpacaDelayedBarDiscovery:
         symbols = sorted({item.ticker for item in self._universe})
         bars: dict[str, dict[datetime, tuple[float, float, float]]] = {symbol: {} for symbol in symbols}
         requests = 0
+        request_ids: list[str] = []
         headers = {
             "APCA-API-KEY-ID": self._settings.alpaca_api_key_id,
             "APCA-API-SECRET-KEY": self._settings.alpaca_api_secret_key,
@@ -126,6 +128,9 @@ class AlpacaDelayedBarDiscovery:
                     f"{self._settings.alpaca_data_base_url.rstrip('/')}/v2/stocks/bars",
                     params=params, headers=headers,
                 )
+                request_id = response.headers.get("x-request-id")
+                if request_id:
+                    request_ids.append(request_id)
                 if response.status_code in {401, 403, 404, 422}:
                     raise DiscoveryUnavailable(
                         code="delayed_bars_unavailable", message=f"Delayed consolidated bars unavailable (HTTP {response.status_code}).",
@@ -180,6 +185,13 @@ class AlpacaDelayedBarDiscovery:
                     "source_reference": f"{listing.source_reference}:bar:{event_times[listing.ticker]}",
                     "observed_at": observed_at,
                     "discovery_reason": reason,
+                    "provenance": {
+                        "data_tier": "delayed_consolidated", "feed": "sip",
+                        "coverage": "consolidated_us_equities",
+                        "expected_delay_seconds": policy["expected_delay_seconds"],
+                        "provider_event_at": event_times[listing.ticker],
+                        "observed_at": observed_at.isoformat(), "request_ids": request_ids,
+                    },
                 }))
         return DiscoveryResult(
             records_count=len(hits), hits=tuple(hits),
