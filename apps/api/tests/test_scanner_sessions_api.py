@@ -459,6 +459,54 @@ def test_session_history_is_paginated_and_returns_summaries(scanner_client):
     assert "candidates" not in first_page[0]
 
 
+@pytest.mark.parametrize("field", ["security_identifier_source", "security_identifier"])
+@pytest.mark.parametrize("sentinel", ["unknown", " Unresolved ", "UNKNOWN"])
+def test_sentinel_security_identity_remains_unresolved(scanner_client, field, sentinel):
+    client, _ = scanner_client
+    response = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input(**{field: sentinel})]},
+    )
+    assert response.status_code == 202
+    session = _wait_for_terminal(client, response.json()["id"])
+    hit = session["discovery_hits"][0]
+    assert hit["admission_outcome"] == "unresolved"
+    assert "security_identity_unresolved" in hit["admission_reasons"]
+    assert hit["security"] is None
+    assert session["candidates"] == []
+
+
+@pytest.mark.parametrize("known_foreign_issuer", [True, False, None])
+def test_ads_reuses_known_foreign_issuer_when_observation_is_omitted(
+    scanner_client, known_foreign_issuer
+):
+    client, _ = scanner_client
+    known = _supplementary_input(
+        security_identifier=f"ads-foreign-issuer-{known_foreign_issuer}",
+        instrument_type="american_depositary_share",
+        foreign_issuer=known_foreign_issuer,
+    )
+    first = client.post("/scanner-sessions", json={"supplementary_inputs": [known]})
+    assert first.status_code == 202
+    original = _wait_for_terminal(client, first.json()["id"])
+    omitted = {key: value for key, value in known.items() if key != "foreign_issuer"}
+    second = client.post("/scanner-sessions", json={"supplementary_inputs": [omitted]})
+    assert second.status_code == 202
+    session = _wait_for_terminal(client, second.json()["id"])
+    hit = session["discovery_hits"][0]
+    expected = "unresolved" if known_foreign_issuer is None else (
+        "admitted" if known_foreign_issuer else "rejected"
+    )
+    assert hit["admission_outcome"] == expected
+    assert hit["observed_listing"]["foreign_issuer"] is None
+    if known_foreign_issuer is not None:
+        assert hit["listing"]["id"] == original["discovery_hits"][0]["listing"]["id"]
+        assert hit["listing"]["foreign_issuer"] is known_foreign_issuer
+    else:
+        assert "foreign_issuer_status_unresolved" in hit["admission_reasons"]
+    assert len(session["candidates"]) == (1 if known_foreign_issuer is True else 0)
+
+
 def test_optional_listing_metadata_can_be_omitted_or_enriched_without_a_conflict(scanner_client):
     client, _ = scanner_client
     known_ratio = _supplementary_input(

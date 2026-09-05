@@ -52,7 +52,7 @@ def _instrument_type(value: str | None) -> str | None:
 def _security(db: Session, item: SupplementaryDiscoveryInput) -> Security | None:
     source = _token(item.security_identifier_source)
     identifier = (item.security_identifier or "").strip()
-    if not source or not identifier:
+    if not source or source in _UNKNOWN_VALUES or identifier.lower() in _UNKNOWN_VALUES:
         return None
     security = (
         db.query(Security)
@@ -90,7 +90,6 @@ def _listing(
         or instrument_type in _UNKNOWN_VALUES
         or item.effective_from is None
         or (item.effective_to is not None and item.effective_to < item.effective_from)
-        or (instrument_type == "american_depositary_share" and item.foreign_issuer is None)
     ):
         return None, False
     listing = (
@@ -104,6 +103,8 @@ def _listing(
         .one_or_none()
     )
     if listing is None:
+        if instrument_type == "american_depositary_share" and item.foreign_issuer is None:
+            return None, False
         listing = Listing(
             security_id=security.id,
             ticker=ticker,
@@ -160,6 +161,7 @@ def _admission(
     status: str | None,
     instrument_type: str | None,
 ) -> tuple[str, list[str]]:
+    foreign_issuer = listing.foreign_issuer if listing is not None else item.foreign_issuer
     unresolved: list[str] = []
     if security is None:
         unresolved.append("security_identity_unresolved")
@@ -175,7 +177,7 @@ def _admission(
         unresolved.append("listing_effective_dates_invalid")
     if listing_conflict:
         unresolved.append("listing_identity_conflict")
-    if instrument_type == "american_depositary_share" and item.foreign_issuer is None:
+    if instrument_type == "american_depositary_share" and foreign_issuer is None:
         unresolved.append("foreign_issuer_status_unresolved")
     if unresolved:
         return "unresolved", unresolved
@@ -194,7 +196,7 @@ def _admission(
         rejected.append("listing_not_active_on_trading_date")
     if instrument_type not in ELIGIBLE_INSTRUMENT_TYPES:
         rejected.append("unsupported_instrument_type")
-    if instrument_type == "american_depositary_share" and item.foreign_issuer is not True:
+    if instrument_type == "american_depositary_share" and foreign_issuer is not True:
         rejected.append("american_depositary_share_not_foreign_issuer")
     if rejected:
         return "rejected", rejected
