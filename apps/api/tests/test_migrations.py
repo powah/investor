@@ -30,6 +30,10 @@ def test_migrations_build_fresh_schema(tmp_path):
     assert "scanner_sessions" in inspector.get_table_names()
     assert "scanner_session_diagnostics" in inspector.get_table_names()
     assert "legacy_imports" in inspector.get_table_names()
+    assert "securities" in inspector.get_table_names()
+    assert "listings" in inspector.get_table_names()
+    assert "discovery_hits" in inspector.get_table_names()
+    assert "scanner_session_candidates" in inspector.get_table_names()
     assert "data_origin" in {
         column["name"] for column in inspector.get_columns("scanner_symbols")
     }
@@ -144,7 +148,16 @@ def test_migrations_adopt_the_pre_phase_zero_schema(tmp_path):
     pre_scanner_session_tables = [
         table
         for table in Base.metadata.sorted_tables
-        if table.name not in {"legacy_imports", "scanner_sessions", "scanner_session_diagnostics"}
+        if table.name
+        not in {
+            "discovery_hits",
+            "legacy_imports",
+            "listings",
+            "scanner_session_candidates",
+            "scanner_sessions",
+            "scanner_session_diagnostics",
+            "securities",
+        }
     ]
     Base.metadata.create_all(engine, tables=pre_scanner_session_tables)
     with engine.begin() as connection:

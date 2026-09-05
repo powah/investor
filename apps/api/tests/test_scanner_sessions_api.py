@@ -20,6 +20,10 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.api.scanner_sessions import router
+from app.scanner_sessions.supplementary_csv import (
+    MAX_SUPPLEMENTARY_CSV_BYTES,
+    MAX_SUPPLEMENTARY_INPUTS,
+)
 from app.scanner_sessions import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -119,6 +123,27 @@ def scanner_client(scanner_database_url: str, request: pytest.FixtureRequest):
     engine.dispose()
 
 
+def _supplementary_input(**overrides) -> dict:
+    payload = {
+        "source": "manual",
+        "source_reference": "operator:research-desk",
+        "ticker": "SINT",
+        "discovery_reason": "Manual catalyst follow-up",
+        "security_identifier_source": "test_registry",
+        "security_identifier": "security-sint",
+        "issuer_name": "SINT Research Corp",
+        "exchange": "NASDAQ",
+        "listing_status": "active",
+        "instrument_type": "common_stock",
+        "effective_from": "2020-01-01",
+        "effective_to": None,
+        "foreign_issuer": False,
+        "depositary_to_underlying_ratio": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _wait_for_terminal(client: TestClient, session_id: int) -> dict:
     deadline = monotonic() + 5
     while monotonic() < deadline:
@@ -170,8 +195,24 @@ def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic
     ]
     assert discovery.calls == 1
 
-    history = client.get("/scanner-sessions").json()
-    assert history[0] == completed
+    history = client.get("/scanner-sessions?limit=1").json()
+    assert history == [
+        {
+            "id": completed["id"],
+            "status": "completed",
+            "stage": "completed",
+            "started_at": "2026-07-06T13:45:00Z",
+            "completed_at": "2026-07-06T13:45:00Z",
+            "trading_date": "2026-07-06",
+            "market_phase": "regular",
+            "scanner_policy_version": "scanner-policy-v1",
+            "scoring_model_version": "scoring-model-v1",
+            "progress": {"completed": 1, "total": 1, "percent": 100},
+            "diagnostics_count": 1,
+            "discovery_hits_count": 0,
+            "candidates_count": 0,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -196,8 +237,15 @@ def test_repeated_and_concurrent_starts_return_one_active_session(scanner_client
 
     assert sessions[0]["id"] == sessions[1]["id"]
     assert discovery.started.wait(2)
-    repeated = client.post("/scanner-sessions").json()
-    assert repeated["id"] == sessions[0]["id"]
+    repeated = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input()]},
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["detail"] == (
+        f"Scanner Session {sessions[0]['id']} is already running; supplementary inputs "
+        "were not accepted."
+    )
     assert discovery.calls == 1
 
     discovery.release.set()
@@ -235,6 +283,485 @@ def test_required_discovery_failure_is_persisted_and_terminal(scanner_client):
     assert failed["diagnostics"][0]["details"] == {
         "capabilities": ["movers", "most_actives"]
     }
+
+
+def test_manual_and_csv_hits_are_retained_admitted_and_deduplicated_by_security(scanner_client):
+    client, _ = scanner_client
+    inputs = [
+        _supplementary_input(),
+        _supplementary_input(
+            source="csv",
+            source_reference="supplementary.csv:2",
+            ticker="SNTX",
+            exchange="NYSE",
+            effective_from="2021-01-01",
+            discovery_reason="CSV high-volume screen",
+        ),
+        _supplementary_input(
+            ticker="ABVC",
+            security_identifier="security-abvc",
+            issuer_name="Foreign Biotech Ltd",
+            exchange="NYSE American",
+            instrument_type="american_depositary_share",
+            foreign_issuer=True,
+            depositary_to_underlying_ratio=2.5,
+        ),
+        _supplementary_input(
+            ticker="FUND",
+            security_identifier="security-fund",
+            instrument_type="fund",
+        ),
+        _supplementary_input(
+            ticker="PINK",
+            security_identifier="security-pink",
+            exchange="OTC",
+        ),
+        _supplementary_input(
+            ticker="MYST",
+            security_identifier_source=None,
+            security_identifier=None,
+            instrument_type=None,
+        ),
+    ]
+
+    response = client.post("/scanner-sessions", json={"supplementary_inputs": inputs})
+
+    assert response.status_code == 202
+    session = response.json()
+    assert [hit["admission_outcome"] for hit in session["discovery_hits"]] == [
+        "admitted",
+        "admitted",
+        "admitted",
+        "rejected",
+        "rejected",
+        "unresolved",
+    ]
+    assert session["discovery_hits"][3]["admission_reasons"] == ["unsupported_instrument_type"]
+    assert session["discovery_hits"][4]["admission_reasons"] == ["unsupported_exchange"]
+    assert session["discovery_hits"][5]["admission_reasons"] == [
+        "security_identity_unresolved",
+        "instrument_classification_unresolved",
+    ]
+    assert session["discovery_hits"][5]["listing"] is None
+    assert session["discovery_hits"][5]["observed_listing"] == {
+        "ticker": "MYST",
+        "exchange": "nasdaq",
+        "status": "active",
+        "instrument_type": None,
+        "effective_from": "2020-01-01",
+        "effective_to": None,
+        "foreign_issuer": False,
+        "depositary_to_underlying_ratio": None,
+    }
+
+    candidates = session["candidates"]
+    assert len(candidates) == 2
+    sint = next(candidate for candidate in candidates if candidate["security"]["identifier"] == "security-sint")
+    assert sint["discovery_sources"] == ["manual", "csv"]
+    assert sint["discovery_reasons"] == ["Manual catalyst follow-up", "CSV high-volume screen"]
+    assert len(sint["discovery_hit_ids"]) == 2
+    assert {listing["ticker"] for listing in sint["observed_listings"]} == {"SINT", "SNTX"}
+    ads = next(candidate for candidate in candidates if candidate["security"]["identifier"] == "security-abvc")
+    assert ads["observed_listings"][0]["instrument_type"] == "american_depositary_share"
+    assert ads["observed_listings"][0]["foreign_issuer"] is True
+    assert ads["observed_listings"][0]["depositary_to_underlying_ratio"] == 2.5
+
+    completed = _wait_for_terminal(client, session["id"])
+    assert completed["status"] == "completed"
+    assert completed["candidates"] == candidates
+
+
+@pytest.mark.parametrize(
+    "instrument_type",
+    ["fund", "preferred_share", "unit", "warrant", "right"],
+)
+def test_candidate_admission_rejects_each_unsupported_instrument_type(
+    scanner_client,
+    instrument_type: str,
+):
+    client, _ = scanner_client
+
+    started = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(
+                    ticker="NOPE",
+                    security_identifier=f"unsupported-{instrument_type}",
+                    instrument_type=instrument_type,
+                )
+            ]
+        },
+    ).json()
+
+    assert started["candidates"] == []
+    assert started["discovery_hits"][0]["admission_outcome"] == "rejected"
+    assert started["discovery_hits"][0]["admission_reasons"] == [
+        "unsupported_instrument_type"
+    ]
+
+
+def test_ticker_changes_reuse_security_while_ticker_reuse_does_not_merge_history(scanner_client):
+    client, _ = scanner_client
+    first = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(ticker="OLD", security_identifier="issuer-a")
+            ]
+        },
+    ).json()
+    first = _wait_for_terminal(client, first["id"])
+    original_security_id = first["candidates"][0]["security"]["id"]
+
+    second = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(
+                    ticker="NEW",
+                    security_identifier="issuer-a",
+                    effective_from="2026-01-01",
+                ),
+                _supplementary_input(
+                    ticker="OLD",
+                    security_identifier="issuer-b",
+                    effective_from="2026-02-01",
+                ),
+            ]
+        },
+    ).json()
+
+    by_identifier = {
+        candidate["security"]["identifier"]: candidate for candidate in second["candidates"]
+    }
+    assert by_identifier["issuer-a"]["security"]["id"] == original_security_id
+    assert by_identifier["issuer-a"]["observed_listings"][0]["ticker"] == "NEW"
+    assert by_identifier["issuer-b"]["security"]["id"] != original_security_id
+    assert by_identifier["issuer-b"]["observed_listings"][0]["ticker"] == "OLD"
+    assert first["candidates"][0]["observed_listings"][0]["ticker"] == "OLD"
+
+
+def test_session_history_is_paginated_and_returns_summaries(scanner_client):
+    client, _ = scanner_client
+    first = client.post("/scanner-sessions").json()
+    _wait_for_terminal(client, first["id"])
+    second = client.post("/scanner-sessions").json()
+    _wait_for_terminal(client, second["id"])
+
+    first_page = client.get("/scanner-sessions?limit=1").json()
+    second_page = client.get("/scanner-sessions?limit=1&offset=1").json()
+
+    assert [item["id"] for item in first_page] == [second["id"]]
+    assert [item["id"] for item in second_page] == [first["id"]]
+    assert "diagnostics" not in first_page[0]
+    assert "discovery_hits" not in first_page[0]
+    assert "candidates" not in first_page[0]
+
+
+@pytest.mark.parametrize("field", ["security_identifier_source", "security_identifier"])
+@pytest.mark.parametrize("sentinel", ["unknown", " Unresolved ", "UNKNOWN"])
+def test_sentinel_security_identity_remains_unresolved(scanner_client, field, sentinel):
+    client, _ = scanner_client
+    response = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input(**{field: sentinel})]},
+    )
+    assert response.status_code == 202
+    session = _wait_for_terminal(client, response.json()["id"])
+    hit = session["discovery_hits"][0]
+    assert hit["admission_outcome"] == "unresolved"
+    assert "security_identity_unresolved" in hit["admission_reasons"]
+    assert hit["security"] is None
+    assert session["candidates"] == []
+
+
+@pytest.mark.parametrize("known_foreign_issuer", [True, False, None])
+def test_ads_reuses_known_foreign_issuer_when_observation_is_omitted(
+    scanner_client, known_foreign_issuer
+):
+    client, _ = scanner_client
+    known = _supplementary_input(
+        security_identifier=f"ads-foreign-issuer-{known_foreign_issuer}",
+        instrument_type="american_depositary_share",
+        foreign_issuer=known_foreign_issuer,
+    )
+    first = client.post("/scanner-sessions", json={"supplementary_inputs": [known]})
+    assert first.status_code == 202
+    original = _wait_for_terminal(client, first.json()["id"])
+    omitted = {key: value for key, value in known.items() if key != "foreign_issuer"}
+    second = client.post("/scanner-sessions", json={"supplementary_inputs": [omitted]})
+    assert second.status_code == 202
+    session = _wait_for_terminal(client, second.json()["id"])
+    hit = session["discovery_hits"][0]
+    expected = "unresolved" if known_foreign_issuer is None else (
+        "admitted" if known_foreign_issuer else "rejected"
+    )
+    assert hit["admission_outcome"] == expected
+    assert hit["observed_listing"]["foreign_issuer"] is None
+    if known_foreign_issuer is not None:
+        assert hit["listing"]["id"] == original["discovery_hits"][0]["listing"]["id"]
+        assert hit["listing"]["foreign_issuer"] is known_foreign_issuer
+    else:
+        assert "foreign_issuer_status_unresolved" in hit["admission_reasons"]
+    assert len(session["candidates"]) == (1 if known_foreign_issuer is True else 0)
+
+
+def test_candidate_listing_snapshots_survive_later_enrichment(scanner_client):
+    client, _ = scanner_client
+    original_input = _supplementary_input(
+        security_identifier="immutable-ads-listing",
+        instrument_type="american_depositary_share",
+        foreign_issuer=True,
+    )
+    first = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [original_input]}
+    )
+    assert first.status_code == 202
+    original = _wait_for_terminal(client, first.json()["id"])
+    enriched_input = {
+        **original_input,
+        "effective_to": "2026-07-07",
+        "depositary_to_underlying_ratio": 2.5,
+    }
+    second = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [original_input, enriched_input, enriched_input]},
+    )
+    assert second.status_code == 202
+    enriched = _wait_for_terminal(client, second.json()["id"])
+
+    reread = client.get(f"/scanner-sessions/{original['id']}").json()
+    assert reread["candidates"] == original["candidates"]
+    listings = enriched["candidates"][0]["observed_listings"]
+    assert len(listings) == 2
+    assert listings[0]["id"] == listings[1]["id"]
+    assert listings[0]["security_id"] == listings[1]["security_id"]
+    for listing, hit in zip(listings, enriched["discovery_hits"]):
+        observation = {
+            key: value for key, value in listing.items()
+            if key not in {"id", "security_id"}
+        }
+        assert observation == hit["observed_listing"]
+    assert listings[0]["effective_to"] is None
+    assert listings[0]["depositary_to_underlying_ratio"] is None
+    assert listings[1]["effective_to"] == "2026-07-07"
+    assert listings[1]["depositary_to_underlying_ratio"] == 2.5
+
+
+def test_optional_listing_metadata_can_be_omitted_or_enriched_without_a_conflict(scanner_client):
+    client, _ = scanner_client
+    known_ratio = _supplementary_input(
+        ticker="ABVC",
+        security_identifier="optional-known-first",
+        exchange="NYSE American",
+        instrument_type="american_depositary_share",
+        foreign_issuer=True,
+        depositary_to_underlying_ratio=2.5,
+    )
+    first = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [known_ratio]}
+    ).json()
+    _wait_for_terminal(client, first["id"])
+
+    omitted_ratio = {**known_ratio, "depositary_to_underlying_ratio": None}
+    second = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [omitted_ratio]}
+    ).json()
+    assert second["discovery_hits"][0]["admission_outcome"] == "admitted"
+    assert second["discovery_hits"][0]["listing"]["depositary_to_underlying_ratio"] == 2.5
+    _wait_for_terminal(client, second["id"])
+
+    unknown_first = {
+        **known_ratio,
+        "security_identifier": "optional-enriched-later",
+        "depositary_to_underlying_ratio": None,
+    }
+    third = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [unknown_first]}
+    ).json()
+    assert third["discovery_hits"][0]["admission_outcome"] == "admitted"
+    _wait_for_terminal(client, third["id"])
+
+    learned_later = {**unknown_first, "depositary_to_underlying_ratio": 3.0}
+    fourth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [learned_later]}
+    ).json()
+    assert fourth["discovery_hits"][0]["admission_outcome"] == "admitted"
+    assert fourth["discovery_hits"][0]["listing"]["depositary_to_underlying_ratio"] == 3.0
+    _wait_for_terminal(client, fourth["id"])
+
+    expired = _supplementary_input(
+        ticker="OLD",
+        security_identifier="known-effective-end",
+        effective_to="2026-07-05",
+    )
+    fifth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [expired]}
+    ).json()
+    assert fifth["discovery_hits"][0]["admission_outcome"] == "rejected"
+    _wait_for_terminal(client, fifth["id"])
+
+    omitted_effective_end = {**expired, "effective_to": None}
+    sixth = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [omitted_effective_end]}
+    ).json()
+    assert sixth["discovery_hits"][0]["admission_outcome"] == "rejected"
+    assert sixth["discovery_hits"][0]["admission_reasons"] == [
+        "listing_not_active_on_trading_date"
+    ]
+
+
+def test_supplementary_csv_records_provenance_and_unresolved_identity(scanner_client):
+    client, _ = scanner_client
+    csv_text = "\n".join(
+        [
+            "ticker,discovery_reason,security_identifier_source,security_identifier,exchange,listing_status,instrument_type,effective_from,foreign_issuer,depositary_to_underlying_ratio",
+            "ABVC,CSV catalyst screen,test_registry,security-abvc,NYSE American,active,american_depositary_share,2020-01-01,true,2.5",
+            "MYST,Needs identity resolution,,,,,,,,",
+        ]
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("supplementary.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 202
+    hits = response.json()["discovery_hits"]
+    assert [hit["source"] for hit in hits] == ["csv", "csv"]
+    assert [hit["source_reference"] for hit in hits] == [
+        "supplementary.csv:2",
+        "supplementary.csv:3",
+    ]
+    assert [hit["admission_outcome"] for hit in hits] == ["admitted", "unresolved"]
+
+
+def test_supplementary_csv_uses_logical_rows_for_multiline_provenance(scanner_client):
+    client, _ = scanner_client
+    csv_text = (
+        'ticker,discovery_reason\n'
+        'ALFA,"First line\nsecond line"\n'
+        'BETA,Second record\n'
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("multiline.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 202
+    assert [hit["source_reference"] for hit in response.json()["discovery_hits"]] == [
+        "multiline.csv:2",
+        "multiline.csv:3",
+    ]
+
+
+def test_supplementary_inputs_reject_non_finite_ratios(scanner_client):
+    client, _ = scanner_client
+
+    response = client.post(
+        "/scanner-sessions",
+        json={
+            "supplementary_inputs": [
+                _supplementary_input(depositary_to_underlying_ratio="Infinity")
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+
+    csv_response = client.post(
+        "/scanner-sessions/import-csv",
+        files={
+            "file": (
+                "non-finite.csv",
+                b"ticker,depositary_to_underlying_ratio\nSINT,inf\n",
+                "text/csv",
+            )
+        },
+    )
+    assert csv_response.status_code == 422
+
+
+def test_supplementary_csv_rejects_oversized_uploads(scanner_client):
+    client, _ = scanner_client
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={
+            "file": (
+                "oversized.csv",
+                b"ticker\n" + b"A" * MAX_SUPPLEMENTARY_CSV_BYTES,
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+
+
+def test_supplementary_csv_applies_the_json_input_count_limit(scanner_client):
+    client, _ = scanner_client
+    csv_text = "ticker\n" + "\n".join(
+        f"ROW{index}" for index in range(MAX_SUPPLEMENTARY_INPUTS + 1)
+    )
+
+    response = client.post(
+        "/scanner-sessions/import-csv",
+        files={"file": ("too-many.csv", csv_text.encode(), "text/csv")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["errors"] == [
+        {
+            "row": MAX_SUPPLEMENTARY_INPUTS + 2,
+            "field": "rows",
+            "message": f"At most {MAX_SUPPLEMENTARY_INPUTS} data rows are allowed.",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "scanner_client",
+    [
+        ControlledDiscovery(
+            failure=DiscoveryUnavailable(
+                code="required_discovery_unavailable",
+                message="Required discovery unavailable.",
+            )
+        ),
+        ControlledDiscovery(failure=RuntimeError("Discovery crashed.")),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("admitted", [True, False])
+def test_discovery_failure_is_partial_only_with_admitted_candidates(scanner_client, admitted):
+    client, _ = scanner_client
+
+    started = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [_supplementary_input(
+            security_identifier="partial-candidate" if admitted else None,
+        )]},
+    ).json()
+    failed = _wait_for_terminal(client, started["id"])
+
+    expected_status = "partial" if admitted else "failed"
+    assert failed["status"] == expected_status
+    assert failed["stage"] == expected_status
+    assert failed["completed_at"] is not None
+    assert len(failed["candidates"]) == int(admitted)
+    assert failed["discovery_hits"][0]["admission_outcome"] == (
+        "admitted" if admitted else "unresolved"
+    )
+    assert failed["diagnostics"][0]["status"] in {"unavailable", "failed"}
+    assert failed["diagnostics"][0]["code"] in {
+        "required_discovery_unavailable", "market_movement_discovery_failed"
+    }
+    retry = client.post("/scanner-sessions").json()
+    assert retry["id"] != failed["id"]
+    _wait_for_terminal(client, retry["id"])
 
 
 def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):

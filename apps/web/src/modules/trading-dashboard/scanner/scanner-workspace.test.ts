@@ -10,7 +10,7 @@ import {
   type ScannerWorkspaceController,
 } from "@/modules/trading-dashboard/scanner/scanner-workspace";
 import { buildCandidate } from "@/test/fixtures";
-import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSessionSummary, ScannerSymbol } from "@/types/trading";
 
 function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
   return {
@@ -26,6 +26,28 @@ function buildSession(overrides: Partial<ScannerSession> = {}): ScannerSession {
     scoring_model_version: "score-v1",
     progress: { completed: 0, total: 4, percent: 0 },
     diagnostics: [],
+    discovery_hits: [],
+    candidates: [],
+    ...overrides,
+  };
+}
+
+function buildSessionSummary(overrides: Partial<ScannerSessionSummary> = {}): ScannerSessionSummary {
+  const session = buildSession();
+  return {
+    id: session.id,
+    status: session.status,
+    stage: session.stage,
+    started_at: session.started_at,
+    completed_at: session.completed_at,
+    trading_date: session.trading_date,
+    market_phase: session.market_phase,
+    scanner_policy_version: session.scanner_policy_version,
+    scoring_model_version: session.scoring_model_version,
+    progress: session.progress,
+    diagnostics_count: 0,
+    discovery_hits_count: 0,
+    candidates_count: 0,
     ...overrides,
   };
 }
@@ -196,6 +218,114 @@ describe("scanner workspace", () => {
     vi.useRealTimers();
   });
 
+  test("shows Discovery Hit admission outcomes and deduplicated Candidates", () => {
+    const candidate = buildCandidate();
+    const security = {
+      id: 10,
+      identifier_source: "test_registry",
+      identifier: "security-alfa",
+      issuer_name: "Alpha Research Corp",
+    };
+    const listing = {
+      id: 20,
+      security_id: 10,
+      ticker: "ALFA",
+      exchange: "nasdaq",
+      status: "active",
+      instrument_type: "common_stock",
+      effective_from: "2020-01-01",
+      effective_to: null,
+      foreign_issuer: false,
+      depositary_to_underlying_ratio: null,
+    };
+    const scannerSession = buildSession({
+      status: "completed",
+      stage: "completed",
+      discovery_hits: [
+        {
+          id: 30,
+          source: "csv",
+          source_reference: "supplementary.csv:2",
+          observed_at: "2026-08-09T08:00:00Z",
+          ticker: "ALFA",
+          discovery_reason: "CSV activity screen",
+          observed_listing: {
+            ticker: "ALFA",
+            exchange: "nasdaq",
+            status: "active",
+            instrument_type: "common_stock",
+            effective_from: "2020-01-01",
+            effective_to: null,
+            foreign_issuer: false,
+            depositary_to_underlying_ratio: null,
+          },
+          admission_outcome: "admitted",
+          admission_reasons: ["target_instrument_universe"],
+          security,
+          listing,
+          candidate_id: 40,
+        },
+        {
+          id: 31,
+          source: "manual",
+          source_reference: "operator:desk",
+          observed_at: "2026-08-09T08:00:00Z",
+          ticker: "MYST",
+          discovery_reason: "Needs identity review",
+          observed_listing: {
+            ticker: "MYST",
+            exchange: null,
+            status: null,
+            instrument_type: null,
+            effective_from: null,
+            effective_to: null,
+            foreign_issuer: null,
+            depositary_to_underlying_ratio: null,
+          },
+          admission_outcome: "unresolved",
+          admission_reasons: ["security_identity_unresolved"],
+          security: null,
+          listing: null,
+          candidate_id: null,
+        },
+      ],
+      candidates: [
+        {
+          id: 40,
+          security,
+          observed_listings: [
+            listing,
+            { ...listing, effective_to: "2026-08-10" },
+            { ...listing, id: 21, ticker: "ALFB" },
+          ],
+          discovery_hit_ids: [30],
+          discovery_sources: ["csv"],
+          discovery_reasons: ["CSV activity screen"],
+        },
+      ],
+    });
+
+    render(
+      createElement(ScannerWorkspace, {
+        workspace: { ...buildWorkspace(candidate), displayedSession: scannerSession },
+        loading: false,
+        watchedTickers: new Set<string>(),
+        maxSpreadPct: 1.5,
+        onRun: vi.fn(),
+        onSelect: vi.fn(),
+        onToggleWatch: vi.fn(),
+        onIgnore: vi.fn(),
+        candidateResearch: null,
+      }),
+    );
+
+    expect(screen.getByRole("region", { name: "Discovery Hits" })).toHaveTextContent("ALFA");
+    expect(screen.getByRole("region", { name: "Discovery Hits" })).toHaveTextContent("unresolved");
+    expect(screen.getByRole("region", { name: "Admitted Candidates" })).toHaveTextContent("Alpha Research Corp");
+    expect(within(screen.getByRole("region", { name: "Admitted Candidates" })).getByText("ALFA, ALFB", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText(/supplementary\.csv:2/)).toBeInTheDocument();
+  });
+
   test("offers watch and ignore actions on mobile with desktop-equivalent saving guards", () => {
     const candidate = buildCandidate();
     const props = {
@@ -220,9 +350,35 @@ describe("scanner workspace", () => {
     expect(mobile.getByRole("button", { name: "Ignore ALFA" })).toBeDisabled();
   });
 
+  test("loads paginated session summaries before fetching only the displayed session details", async () => {
+    const detailedSession = buildSession({ id: 7, status: "completed", stage: "completed" });
+    const remote: ScannerRemote = {
+      listCandidates: vi.fn().mockResolvedValue([]),
+      listLegacyImports: vi.fn().mockResolvedValue([]),
+      listSessions: vi.fn().mockResolvedValue([
+        buildSessionSummary({ id: 7, status: "completed", stage: "completed" }),
+      ]),
+      getSession: vi.fn().mockResolvedValue(detailedSession),
+      importSampleCandidates: vi.fn(),
+      startSession: vi.fn(),
+      importCandidatesCsv: vi.fn(),
+      updateCandidateStatus: vi.fn(),
+    };
+    const { result } = renderHook(() =>
+      useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }),
+    );
+
+    await act(async () => {
+      await result.current.load();
+    });
+
+    expect(remote.getSession).toHaveBeenCalledWith(7);
+    expect(result.current.sessions).toEqual([detailedSession]);
+  });
+
   test("keeps concurrent scanner actions pending independently", async () => {
     const sampleImport = deferred<ScannerSymbol[]>();
-    const csvImport = deferred<ScannerSymbol[]>();
+    const csvImport = deferred<ScannerSession>();
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
       listLegacyImports: vi.fn().mockResolvedValue([]),
@@ -252,7 +408,7 @@ describe("scanner workspace", () => {
     });
     expect(result.current.pendingActions).toEqual(new Set(["csv-import"]));
 
-    csvImport.resolve([]);
+    csvImport.resolve(buildSession({ id: 2, status: "completed", stage: "completed" }));
     await act(async () => {
       await csvPromise;
     });
@@ -273,7 +429,7 @@ describe("scanner workspace", () => {
         .mockResolvedValue(buildSession({ progress: { completed: 2, total: 4, percent: 50 } })),
       importSampleCandidates: vi.fn().mockResolvedValue([]),
       startSession: vi.fn().mockResolvedValue(session),
-      importCandidatesCsv: vi.fn().mockResolvedValue([]),
+      importCandidatesCsv: vi.fn().mockResolvedValue(buildSession({ id: 2 })),
       updateCandidateStatus: vi.fn(),
     };
     const { result } = renderHook(() =>

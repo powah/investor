@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Eye, EyeOff, Play, RefreshCw, Search } from "lucide-react";
 import { currency, number } from "@/lib/api";
-import type { LegacyImport, ScannerSession, ScannerSymbol } from "@/types/trading";
+import type { LegacyImport, ScannerSession, ScannerSessionSummary, ScannerSymbol } from "@/types/trading";
 
 export type ScannerFilter = "all" | "qualified" | "watching" | "caution";
 
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
   listLegacyImports(context: "operational" | "demo"): Promise<LegacyImport[]>;
-  listSessions(): Promise<ScannerSession[]>;
+  listSessions(): Promise<ScannerSessionSummary[]>;
   getSession(sessionId: number): Promise<ScannerSession>;
   importSampleCandidates(): Promise<ScannerSymbol[]>;
   startSession(): Promise<ScannerSession>;
-  importCandidatesCsv(file: File): Promise<ScannerSymbol[]>;
+  importCandidatesCsv(file: File): Promise<ScannerSession>;
   updateCandidateStatus(ticker: string, status: ScannerSymbol["status"]): Promise<ScannerSymbol>;
 };
 
@@ -85,10 +85,13 @@ export function useScannerWorkspace(
   }, []);
 
   const load = useCallback(async () => {
-    const [candidateData, sessionData] = await Promise.all([
+    const [candidateData, sessionSummaries] = await Promise.all([
       remote.listCandidates(),
       remote.listSessions(),
     ]);
+    const displayedSummary =
+      sessionSummaries.find((session) => session.status === "running") ?? sessionSummaries[0] ?? null;
+    const sessionData = displayedSummary ? [await remote.getSession(displayedSummary.id)] : [];
     setCandidates(candidateData);
     setSessions(sessionData);
     setSelectedTicker((current) => current || candidateData[0]?.ticker || "");
@@ -221,9 +224,10 @@ export function useScannerWorkspace(
       const actionId = "csv-import";
       beginAction(actionId);
       try {
-        await remote.importCandidatesCsv(file);
+        const scannerSession = await remote.importCandidatesCsv(file);
+        setSessions((current) => [scannerSession, ...current.filter((session) => session.id !== scannerSession.id)]);
         await refresh();
-        return `${file.name} imported into the scanner.`;
+        return `${file.name} attached to Scanner Session #${scannerSession.id} as supplementary discovery.`;
       } finally {
         endAction(actionId);
       }
@@ -599,9 +603,66 @@ function ScannerSessionPanel({
               </div>
             ))}
           </div>
+          <SessionDiscoveryDetails scannerSession={scannerSession} />
         </div>
       )}
     </section>
+  );
+}
+
+function SessionDiscoveryDetails({ scannerSession }: { scannerSession: ScannerSession }) {
+  if (scannerSession.discovery_hits.length === 0) {
+    return null;
+  }
+  const outcomeTone = {
+    admitted: "bg-teal-50 text-teal-800 ring-teal-200",
+    rejected: "bg-red-50 text-red-800 ring-red-200",
+    unresolved: "bg-amber-50 text-amber-800 ring-amber-200",
+  };
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <section aria-label="Discovery Hits">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Discovery Hits ({scannerSession.discovery_hits.length})
+        </h4>
+        <div className="mt-2 space-y-2">
+          {scannerSession.discovery_hits.map((hit) => (
+            <article key={hit.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-ink">{hit.ticker}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold capitalize ring-1 ring-inset ${outcomeTone[hit.admission_outcome]}`}>
+                  {hit.admission_outcome}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-700">{hit.discovery_reason}</p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {hit.observed_listing.exchange ?? "Exchange unknown"} · {hit.observed_listing.instrument_type?.replaceAll("_", " ") ?? "Instrument unknown"}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">{hit.source} · {hit.source_reference}</p>
+              <p className="mt-1 text-[11px] text-slate-500">{hit.admission_reasons.map((reason) => reason.replaceAll("_", " ")).join(" · ")}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section aria-label="Admitted Candidates">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Candidates ({scannerSession.candidates.length})
+        </h4>
+        <div className="mt-2 space-y-2">
+          {scannerSession.candidates.length === 0 ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">No admitted Candidates.</p>
+          ) : scannerSession.candidates.map((candidate) => (
+            <article key={candidate.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <div className="font-semibold text-ink">{[...new Set(candidate.observed_listings.map((listing) => listing.ticker))].join(", ")}</div>
+              <p className="mt-1 text-xs text-slate-600">
+                {candidate.security.issuer_name ?? candidate.security.identifier} · {candidate.discovery_sources.join(" + ")}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">{candidate.discovery_reasons.join(" · ")}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 

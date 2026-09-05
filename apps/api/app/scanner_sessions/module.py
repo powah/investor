@@ -7,12 +7,20 @@ from datetime import datetime, timedelta
 from typing import Any, Mapping
 from uuid import uuid4
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.scanner_sessions import ScannerSession, ScannerSessionDiagnostic
+from app.models.scanner_sessions import (
+    DiscoveryHit,
+    Listing,
+    ScannerSession,
+    ScannerSessionCandidate,
+    ScannerSessionDiagnostic,
+    Security,
+)
 from app.scanner_session_types import ScannerSessionDiagnosticStatus
+from app.scanner_sessions.admission import admit_supplementary_inputs
 from app.scanner_sessions.domain import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -21,9 +29,16 @@ from app.scanner_sessions.domain import (
     utc_now,
 )
 from app.schemas.scanner_sessions import (
+    CandidateRead,
+    DiscoveryHitRead,
+    ListingObservationRead,
+    ListingRead,
     ScannerSessionDiagnosticRead,
     ScannerSessionProgressRead,
     ScannerSessionRead,
+    ScannerSessionSummaryRead,
+    SecurityRead,
+    SupplementaryDiscoveryInput,
 )
 
 
@@ -61,6 +76,15 @@ class ScannerSessionNotFound(LookupError):
     pass
 
 
+class ScannerSessionActive(RuntimeError):
+    def __init__(self, session_id: int):
+        self.session_id = session_id
+        super().__init__(
+            f"Scanner Session {session_id} is already running; supplementary inputs "
+            "were not accepted."
+        )
+
+
 class _ScannerRunOwnershipLost(RuntimeError):
     pass
 
@@ -79,11 +103,16 @@ class ScannerSessions:
         self._owner_id = uuid4().hex
         self._tasks: set[asyncio.Task[None]] = set()
 
-    async def start(self) -> ScannerSessionRead:
+    async def start(
+        self,
+        supplementary_inputs: list[SupplementaryDiscoveryInput] | None = None,
+    ) -> ScannerSessionRead:
         self.recover_interrupted()
         with self._session_factory() as db:
             active = self._active(db)
             if active is not None:
+                if supplementary_inputs:
+                    raise ScannerSessionActive(active.id)
                 return self._read(active)
 
             started_at = self._clock()
@@ -116,12 +145,21 @@ class ScannerSessions:
             )
             db.add(session)
             try:
+                db.flush()
+                admit_supplementary_inputs(
+                    db,
+                    session=session,
+                    inputs=supplementary_inputs or [],
+                    observed_at=started_at,
+                )
                 db.commit()
             except IntegrityError:
                 db.rollback()
                 active = self._active(db)
                 if active is None:
                     raise
+                if supplementary_inputs:
+                    raise ScannerSessionActive(active.id)
                 return self._read(active)
             db.refresh(session)
             session_id = session.id
@@ -132,16 +170,53 @@ class ScannerSessions:
         task.add_done_callback(self._tasks.discard)
         return result
 
-    def list(self) -> list[ScannerSessionRead]:
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ScannerSessionSummaryRead]:
         self.recover_interrupted()
         with self._session_factory() as db:
-            sessions = (
-                db.query(ScannerSession)
-                .options(selectinload(ScannerSession.diagnostics))
+            diagnostics_count = (
+                db.query(func.count(ScannerSessionDiagnostic.id))
+                .filter(ScannerSessionDiagnostic.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            discovery_hits_count = (
+                db.query(func.count(DiscoveryHit.id))
+                .filter(DiscoveryHit.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            candidates_count = (
+                db.query(func.count(ScannerSessionCandidate.id))
+                .filter(ScannerSessionCandidate.scanner_session_id == ScannerSession.id)
+                .correlate(ScannerSession)
+                .scalar_subquery()
+            )
+            rows = (
+                db.query(
+                    ScannerSession,
+                    diagnostics_count.label("diagnostics_count"),
+                    discovery_hits_count.label("discovery_hits_count"),
+                    candidates_count.label("candidates_count"),
+                )
                 .order_by(ScannerSession.started_at.desc(), ScannerSession.id.desc())
+                .offset(offset)
+                .limit(limit)
                 .all()
             )
-            return [self._read(session) for session in sessions]
+            return [
+                self._summary_read(
+                    session,
+                    diagnostics_count=diagnostic_total,
+                    discovery_hits_count=hit_total,
+                    candidates_count=candidate_total,
+                )
+                for session, diagnostic_total, hit_total, candidate_total in rows
+            ]
 
     def get(self, session_id: int) -> ScannerSessionRead:
         self.recover_interrupted()
@@ -154,7 +229,7 @@ class ScannerSessions:
         with self._session_factory() as db:
             active = (
                 db.query(ScannerSession)
-                .options(selectinload(ScannerSession.diagnostics))
+                .options(*self._load_options())
                 .filter(
                     ScannerSession.active_slot.is_(True),
                     or_(
@@ -309,25 +384,25 @@ class ScannerSessions:
         diagnostic.message = failure.message
         diagnostic.details = dict(failure.details)
         diagnostic.completed_at = completed_at
-        session.status = "failed"
-        session.stage = "failed"
+        session.status = "partial" if session.candidates else "failed"
+        session.stage = session.status
         session.completed_at = completed_at
         session.active_slot = None
 
-    @staticmethod
-    def _active(db: Session) -> ScannerSession | None:
+    @classmethod
+    def _active(cls, db: Session) -> ScannerSession | None:
         return (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*cls._load_options())
             .filter(ScannerSession.active_slot.is_(True))
             .one_or_none()
         )
 
-    @staticmethod
-    def _by_id(db: Session, session_id: int) -> ScannerSession:
+    @classmethod
+    def _by_id(cls, db: Session, session_id: int) -> ScannerSession:
         session = (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*cls._load_options())
             .filter(ScannerSession.id == session_id)
             .one_or_none()
         )
@@ -344,7 +419,7 @@ class ScannerSessions:
     ) -> ScannerSession | None:
         query = (
             db.query(ScannerSession)
-            .options(selectinload(ScannerSession.diagnostics))
+            .options(*self._load_options())
             .filter(
                 ScannerSession.id == session_id,
                 ScannerSession.active_slot.is_(True),
@@ -356,7 +431,73 @@ class ScannerSessions:
         return query.one_or_none()
 
     @staticmethod
-    def _read(session: ScannerSession) -> ScannerSessionRead:
+    def _load_options() -> tuple[Any, ...]:
+        return (
+            selectinload(ScannerSession.diagnostics),
+            selectinload(ScannerSession.discovery_hits).selectinload(DiscoveryHit.security),
+            selectinload(ScannerSession.discovery_hits).selectinload(DiscoveryHit.listing),
+            selectinload(ScannerSession.candidates).selectinload(ScannerSessionCandidate.security),
+            selectinload(ScannerSession.candidates)
+            .selectinload(ScannerSessionCandidate.discovery_hits)
+            .selectinload(DiscoveryHit.listing),
+        )
+
+    @staticmethod
+    def _security_read(security: Security) -> SecurityRead:
+        return SecurityRead(
+            id=security.id,
+            identifier_source=security.identifier_source,
+            identifier=security.identifier,
+            issuer_name=security.issuer_name,
+        )
+
+    @staticmethod
+    def _listing_read(listing: Listing) -> ListingRead:
+        return ListingRead(
+            id=listing.id,
+            security_id=listing.security_id,
+            ticker=listing.ticker,
+            exchange=listing.exchange,
+            status=listing.status,
+            instrument_type=listing.instrument_type,
+            effective_from=listing.effective_from,
+            effective_to=listing.effective_to,
+            foreign_issuer=listing.foreign_issuer,
+            depositary_to_underlying_ratio=listing.depositary_to_underlying_ratio,
+        )
+
+    @staticmethod
+    def _summary_read(
+        session: ScannerSession,
+        *,
+        diagnostics_count: int,
+        discovery_hits_count: int,
+        candidates_count: int,
+    ) -> ScannerSessionSummaryRead:
+        total = session.progress_total
+        percent = round((session.progress_completed / total) * 100) if total else 0
+        return ScannerSessionSummaryRead(
+            id=session.id,
+            status=session.status,
+            stage=session.stage,
+            started_at=session.started_at,
+            completed_at=session.completed_at,
+            trading_date=session.trading_date,
+            market_phase=session.market_phase,
+            scanner_policy_version=session.scanner_policy_version,
+            scoring_model_version=session.scoring_model_version,
+            progress=ScannerSessionProgressRead(
+                completed=session.progress_completed,
+                total=total,
+                percent=percent,
+            ),
+            diagnostics_count=diagnostics_count,
+            discovery_hits_count=discovery_hits_count,
+            candidates_count=candidates_count,
+        )
+
+    @classmethod
+    def _read(cls, session: ScannerSession) -> ScannerSessionRead:
         total = session.progress_total
         percent = round((session.progress_completed / total) * 100) if total else 0
         return ScannerSessionRead(
@@ -390,4 +531,67 @@ class ScannerSessions:
                 )
                 for diagnostic in session.diagnostics
             ],
+            discovery_hits=[
+                DiscoveryHitRead(
+                    id=hit.id,
+                    source=hit.source,
+                    source_reference=hit.source_reference,
+                    observed_at=hit.observed_at,
+                    ticker=hit.ticker,
+                    discovery_reason=hit.discovery_reason,
+                    observed_listing=cls._listing_observation_read(hit),
+                    admission_outcome=hit.admission_outcome,
+                    admission_reasons=hit.admission_reasons,
+                    security=cls._security_read(hit.security) if hit.security else None,
+                    listing=cls._listing_read(hit.listing) if hit.listing else None,
+                    candidate_id=hit.candidate_id,
+                )
+                for hit in session.discovery_hits
+            ],
+            candidates=[cls._candidate_read(candidate) for candidate in session.candidates],
+        )
+
+    @staticmethod
+    def _listing_observation_read(hit: DiscoveryHit) -> ListingObservationRead:
+        return ListingObservationRead(
+            ticker=hit.ticker,
+            exchange=hit.observed_exchange,
+            status=hit.observed_listing_status,
+            instrument_type=hit.observed_instrument_type,
+            effective_from=hit.observed_effective_from,
+            effective_to=hit.observed_effective_to,
+            foreign_issuer=hit.observed_foreign_issuer,
+            depositary_to_underlying_ratio=hit.observed_depositary_to_underlying_ratio,
+        )
+
+    @classmethod
+    def _candidate_read(cls, candidate: ScannerSessionCandidate) -> CandidateRead:
+        listings: list[ListingRead] = []
+        listing_snapshots: set[tuple[object, ...]] = set()
+        sources: list[str] = []
+        reasons: list[str] = []
+        for hit in candidate.discovery_hits:
+            if hit.listing_id is not None:
+                observation = cls._listing_observation_read(hit).model_dump()
+                snapshot_key = (hit.listing_id, *observation.values())
+                if snapshot_key not in listing_snapshots:
+                    listings.append(
+                        ListingRead(
+                            id=hit.listing_id,
+                            security_id=candidate.security_id,
+                            **observation,
+                        )
+                    )
+                    listing_snapshots.add(snapshot_key)
+            if hit.source not in sources:
+                sources.append(hit.source)
+            if hit.discovery_reason not in reasons:
+                reasons.append(hit.discovery_reason)
+        return CandidateRead(
+            id=candidate.id,
+            security=cls._security_read(candidate.security),
+            observed_listings=listings,
+            discovery_hit_ids=[hit.id for hit in candidate.discovery_hits],
+            discovery_sources=sources,
+            discovery_reasons=reasons,
         )

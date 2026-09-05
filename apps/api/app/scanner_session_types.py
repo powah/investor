@@ -7,6 +7,7 @@ ScannerSessionStage = Literal[
     "starting",
     "market_movement_discovery",
     "completed",
+    "partial",
     "failed",
     "cancelled",
 ]
