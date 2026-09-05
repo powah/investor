@@ -369,7 +369,7 @@ export function TradingDashboard(
 
       <div className="mx-auto max-w-[1500px] px-4 py-5 sm:px-6">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Scanner universe" value={scannerWorkspace.candidates.length.toString()} />
+          <Metric label="Actionable Current Session" value={scannerWorkspace.currentSession ? `#${scannerWorkspace.currentSession.id}` : "None"} />
           <Metric label="Active watchlist" value={watchlistWorkspace.items.length.toString()} />
           <Metric
             label="Daily loss room"

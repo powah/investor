@@ -131,6 +131,8 @@ export class InMemoryDashboardRemote {
   readonly scanner: ScannerRemote = {
     listCandidates: () => this.result("scanner.listCandidates", [alfa, beta]),
     listLegacyImports: () => this.result("scanner.listLegacyImports", []),
+    getCurrentSession: () => this.result("scanner.getCurrentSession", null),
+    cancelSession: () => Promise.reject(new Error("No active Scanner Session")),
     listSessions: () => this.result("scanner.listSessions", []),
     getSession: () => this.unsupported("scanner.getSession"),
     importSampleCandidates: () => this.unsupported("scanner.importSampleCandidates"),

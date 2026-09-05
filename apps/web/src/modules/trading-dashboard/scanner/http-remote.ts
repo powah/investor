@@ -6,7 +6,9 @@ export const httpScannerRemote: ScannerRemote = {
   listCandidates: () => apiFetch<ScannerSymbol[]>("/scanner"),
   listLegacyImports: (context) =>
     apiFetch<LegacyImport[]>(`/legacy-imports?context=${encodeURIComponent(context)}`),
-  listSessions: () => apiFetch<ScannerSessionSummary[]>("/scanner-sessions"),
+  listSessions: (offset = 0) => apiFetch<ScannerSessionSummary[]>(`/scanner-sessions?offset=${offset}`),
+  getCurrentSession: () => apiFetch<ScannerSession | null>("/scanner-sessions/current"),
+  cancelSession: (id) => apiFetch<ScannerSession>(`/scanner-sessions/${id}/cancel`, { method: "POST" }),
   getSession: (sessionId) => apiFetch<ScannerSession>(`/scanner-sessions/${sessionId}`),
   importSampleCandidates: () => apiFetch<ScannerSymbol[]>("/scanner/import-sample", { method: "POST" }),
   startSession: () => apiFetch<ScannerSession>("/scanner-sessions", { method: "POST" }),

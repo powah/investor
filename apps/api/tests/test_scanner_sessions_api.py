@@ -219,6 +219,7 @@ def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic
         "market_cap_ceiling_usd": 2_000_000_000,
         "minimum_price_usd": 1,
         "required_sources": ["market_movement"],
+        "currentness_max_age_seconds": 900,
     }
     assert started["scoring_model_version"] == "scoring-model-v1"
     assert started["progress"] == {"completed": 0, "total": 1, "percent": 0}
@@ -965,3 +966,163 @@ def test_exchange_session_identity_uses_new_york_calendar(
 
     assert identity.trading_date.isoformat() == trading_date
     assert identity.market_phase == market_phase
+
+
+def test_current_promotion_and_degraded_history_are_independent(scanner_client):
+    client, discovery = scanner_client
+    good = client.post('/scanner-sessions', json={
+        'supplementary_inputs': [_supplementary_input()],
+    }).json()
+    completed = _wait_for_terminal(client, good['id'])
+    assert client.get('/scanner-sessions/current').json() == completed
+
+    for status in ('partial', 'failed', 'cancelled'):
+        discovery.release = Event()
+        discovery.failure = RuntimeError('Required source failed')
+        started = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [] if status == 'failed' else [_supplementary_input()],
+        }).json()
+        assert started['status'] == 'running'
+        assert client.get('/scanner-sessions/current').json() == completed
+        if status == 'cancelled':
+            cancelled = client.post(f"/scanner-sessions/{started['id']}/cancel")
+            assert cancelled.status_code == 200
+        discovery.release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == status
+        assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+        assert client.get('/scanner-sessions/current').json() == completed
+        # Cancellation is idempotent and cannot rewrite any terminal outcome.
+        assert client.post(f"/scanner-sessions/{started['id']}/cancel").json() == terminal
+        assert any(item['id'] == started['id'] for item in client.get('/scanner-sessions').json())
+
+    discovery.failure = None
+    newer = client.post('/scanner-sessions', json={
+        'supplementary_inputs': [_supplementary_input(), _supplementary_input(
+            security_identifier='second-promoted-security', ticker='NEXT',
+        )],
+    }).json()
+    replacement = _wait_for_terminal(client, newer['id'])
+    assert len(replacement['candidates']) == 2
+    assert client.get('/scanner-sessions/current').json() == replacement
+    assert client.get(f"/scanner-sessions/{good['id']}").json() == completed
+    assert client.get('/scanner-sessions/current').json() == replacement
+    assert client.post('/scanner-sessions/999999999/cancel').status_code == 404
+
+
+@pytest.mark.parametrize('required', [False, True])
+def test_policy_controls_source_failure_and_atomic_candidate_visibility(scanner_database_url, required):
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+    release = Event()
+    supplementary = ControlledDiscovery(release=release, failure=RuntimeError('News unavailable'))
+    now = [FIXED_START + timedelta(days=1 if required else 2)]
+    scanner = ScannerSessions(
+        factory,
+        discovery_factory=lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': lambda _: supplementary},
+        policy_settings={
+            'required_sources': ['market_movement', 'news'] if required else ['market_movement'],
+            'currentness_max_age_seconds': 900,
+        },
+        clock=lambda: now[0],
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        assert client.get('/scanner-sessions/current').json() is None
+        started = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [_supplementary_input()],
+        }).json()
+        assert supplementary.started.wait(2)
+        running = client.get(f"/scanner-sessions/{started['id']}").json()
+        assert running['status'] == 'running'
+        assert len(running['candidates']) == 1
+        assert client.get('/scanner-sessions/current').json() is None
+        release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == ('partial' if required else 'completed')
+        assert terminal['diagnostics'][1]['required'] is required
+        assert terminal['diagnostics'][1]['status'] == 'failed'
+        current = client.get('/scanner-sessions/current').json()
+        assert current == (None if required else terminal)
+        # A Candidate with no enrichment/evaluation still permits completion.
+        assert len(terminal['candidates']) == 1
+        now[0] += timedelta(minutes=15, seconds=1)
+        assert client.get('/scanner-sessions/current').json() is None
+        assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+    engine.dispose()
+
+
+@pytest.mark.parametrize('later', [
+    FIXED_START + timedelta(days=1),
+    FIXED_START.replace(hour=20),
+    FIXED_START.replace(hour=1),
+])
+def test_currentness_requires_current_exchange_date_phase_and_nonfuture_start(scanner_client, scanner_database_url, later):
+    client, _ = scanner_client
+    started = client.post('/scanner-sessions').json()
+    terminal = _wait_for_terminal(client, started['id'])
+    engine = create_engine(scanner_database_url)
+    scanner = ScannerSessions(sessionmaker(bind=engine), discovery_factory=lambda _: ControlledDiscovery(), clock=lambda: later)
+    client.app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    assert client.get('/scanner-sessions/current').json() is None
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+    engine.dispose()
+
+
+def test_concurrent_current_readers_see_only_whole_candidate_sets(scanner_client):
+    client, discovery = scanner_client
+    first = client.post('/scanner-sessions').json()
+    good = _wait_for_terminal(client, first['id'])
+    discovery.release = Event()
+    discovery.result = DiscoveryResult(
+        records_count=12,
+        message='Complete discovery batch',
+        hits=tuple(NormalizedDiscoveryHit(**_supplementary_input(
+            security_identifier=f'atomic-security-{index}', ticker=f'AT{index}',
+        )) for index in range(12)),
+    )
+    started = client.post('/scanner-sessions').json()
+    assert client.get('/scanner-sessions/current').json() == good
+
+    def observe_completion():
+        observed = []
+        deadline = monotonic() + 3
+        while monotonic() < deadline:
+            current = client.get('/scanner-sessions/current').json()
+            observed.append(current)
+            if current['id'] == started['id']:
+                return observed
+        pytest.fail('Completed session was never promoted')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        readers = [executor.submit(observe_completion) for _ in range(2)]
+        discovery.release.set()
+        observations = [future.result() for future in readers]
+    for snapshots in observations:
+        for snapshot in snapshots:
+            assert snapshot['status'] == 'completed'
+            if snapshot['id'] == good['id']:
+                assert snapshot == good
+            else:
+                assert snapshot['id'] == started['id']
+                assert len(snapshot['candidates']) == 12
+                assert len(snapshot['discovery_hits']) == 12
+                assert snapshot['diagnostics'][0]['records_count'] == 12
+
+
+def test_cancellation_wins_against_late_provider_result(scanner_client):
+    client, discovery = scanner_client
+    discovery.release = Event()
+    started = client.post('/scanner-sessions').json()
+    assert discovery.started.wait(2)
+    cancelled = client.post(f"/scanner-sessions/{started['id']}/cancel").json()
+    assert cancelled['status'] == 'cancelled'
+    assert cancelled['diagnostics'][0]['code'] == 'operator_cancelled'
+    discovery.release.set()
+    retry = client.post('/scanner-sessions').json()
+    assert retry['id'] != cancelled['id']
+    _wait_for_terminal(client, retry['id'])
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == cancelled

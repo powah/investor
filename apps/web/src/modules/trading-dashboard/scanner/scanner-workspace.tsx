@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Eye, EyeOff, Play, RefreshCw, Search } from "lucide-react";
 import { currency, number } from "@/lib/api";
 import type { LegacyImport, ScannerSession, ScannerSessionSummary, ScannerSymbol } from "@/types/trading";
@@ -8,7 +8,9 @@ export type ScannerFilter = "all" | "qualified" | "watching" | "caution";
 export type ScannerRemote = {
   listCandidates(): Promise<ScannerSymbol[]>;
   listLegacyImports(context: "operational" | "demo"): Promise<LegacyImport[]>;
-  listSessions(): Promise<ScannerSessionSummary[]>;
+  listSessions(offset?: number): Promise<ScannerSessionSummary[]>;
+  getCurrentSession(): Promise<ScannerSession | null>;
+  cancelSession(sessionId: number): Promise<ScannerSession>;
   getSession(sessionId: number): Promise<ScannerSession>;
   importSampleCandidates(): Promise<ScannerSymbol[]>;
   startSession(): Promise<ScannerSession>;
@@ -64,6 +66,11 @@ export function useScannerWorkspace(
 ) {
   const [candidates, setCandidates] = useState<ScannerSymbol[]>([]);
   const [sessions, setSessions] = useState<ScannerSession[]>([]);
+  const [sessionHistory, setSessionHistory] = useState<ScannerSessionSummary[]>([]);
+  const [currentSession, setCurrentSession] = useState<ScannerSession | null>(null);
+  const [inspectedSession, setInspectedSession] = useState<ScannerSession | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const inspectionRequest = useRef(0);
   const [legacyImports, setLegacyImports] = useState<LegacyImport[]>([]);
   const [legacyImportsError, setLegacyImportsError] = useState<string | null>(null);
   const [scannerView, setScannerView] = useState<"current" | "legacy">("current");
@@ -85,26 +92,26 @@ export function useScannerWorkspace(
   }, []);
 
   const load = useCallback(async () => {
-    const [candidateData, sessionSummaries] = await Promise.all([
+    const [candidateData, sessionSummaries, actionable] = await Promise.all([
       remote.listCandidates(),
       remote.listSessions(),
+      remote.getCurrentSession(),
     ]);
     const displayedSummary =
       sessionSummaries.find((session) => session.status === "running") ?? sessionSummaries[0] ?? null;
     const sessionData = displayedSummary ? [await remote.getSession(displayedSummary.id)] : [];
+    setCurrentSession(actionable);
+    setSessionHistory(sessionSummaries);
     setCandidates(candidateData);
     setSessions(sessionData);
     setSelectedTicker((current) => current || candidateData[0]?.ticker || "");
     return candidateData;
   }, [remote]);
 
-  const displayedSession = sessions.find((session) => session.status === "running") ?? sessions[0] ?? null;
-  const activeSessionId = displayedSession?.status === "running" ? displayedSession.id : null;
+  const displayedSession = inspectedSession ?? sessions.find((session) => session.status === "running") ?? sessions[0] ?? null;
+  const activeSessionId = sessions.find((session) => session.status === "running")?.id ?? null;
 
   useEffect(() => {
-    if (activeSessionId === null) {
-      return;
-    }
     const scannerSessionId = activeSessionId;
     let cancelled = false;
     let refreshPending = false;
@@ -115,24 +122,79 @@ export function useScannerWorkspace(
       }
       refreshPending = true;
       try {
-        const updated = await remote.getSession(scannerSessionId);
+        const [updated, actionable, history] = await Promise.all([
+          scannerSessionId === null ? Promise.resolve(null) : remote.getSession(scannerSessionId),
+          remote.getCurrentSession(),
+          remote.listSessions(),
+        ]);
         if (!cancelled) {
-          setSessions((current) => [updated, ...current.filter((session) => session.id !== updated.id)]);
+          setCurrentSession(actionable);
+          setSessionError(null);
+          setSessionHistory((previous) => [...history, ...previous.filter((item) => !history.some((entry) => entry.id === item.id))]);
+          if (updated) {
+            setSessions((current) => [updated, ...current.filter((session) => session.id !== updated.id)]);
+            setInspectedSession((current) => current?.id === updated.id ? updated : current);
+          }
         }
       } catch {
-        // Keep the last persisted progress visible; the normal workspace refresh reports connectivity errors.
+        if (!cancelled) {
+          setCurrentSession(null);
+          setSessionError("Unable to verify the Actionable Current Session. Refresh to retry.");
+        }
+        // Persisted attempt progress remains inspectable during connectivity failures.
       } finally {
         refreshPending = false;
       }
     }
 
-    const interval = window.setInterval(() => void refreshScannerSession(), 1000);
+    const interval = window.setInterval(() => void refreshScannerSession(), scannerSessionId === null ? 15000 : 1000);
     void refreshScannerSession();
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
   }, [activeSessionId, remote]);
+
+  const inspectSession = useCallback(async (sessionId: number | null) => {
+    const request = ++inspectionRequest.current;
+    setSessionError(null);
+    if (sessionId === null) {
+      setInspectedSession(null);
+      return;
+    }
+    try {
+      const session = await remote.getSession(sessionId);
+      if (request === inspectionRequest.current) setInspectedSession(session);
+    } catch (error) {
+      if (request === inspectionRequest.current) setSessionError(String(error));
+    }
+  }, [remote]);
+
+  const loadMoreHistory = useCallback(async () => {
+    try {
+      const older = await remote.listSessions(sessionHistory.length);
+      setSessionHistory((current) => [...current, ...older.filter((item) => !current.some((entry) => entry.id === item.id))]);
+    } catch (error) {
+      setSessionError(String(error));
+    }
+  }, [remote, sessionHistory.length]);
+
+  const cancelSession = useCallback(async () => {
+    if (activeSessionId === null) return;
+    beginAction("cancel-session");
+    setSessionError(null);
+    try {
+      const cancelled = await remote.cancelSession(activeSessionId);
+      setSessions((current) => [cancelled, ...current.filter((item) => item.id !== cancelled.id)]);
+      setInspectedSession((current) => current?.id === cancelled.id ? cancelled : current);
+      setCurrentSession(await remote.getCurrentSession());
+      setSessionHistory(await remote.listSessions());
+    } catch (error) {
+      setSessionError(String(error));
+    } finally {
+      endAction("cancel-session");
+    }
+  }, [activeSessionId, beginAction, endAction, remote]);
 
   const selectedCandidate = useMemo(
     () => candidates.find((candidate) => candidate.ticker === selectedTicker) ?? null,
@@ -257,6 +319,14 @@ export function useScannerWorkspace(
   return {
     candidates,
     sessions,
+    sessionHistory,
+    currentSession,
+    inspectedSession,
+    sessionError,
+    activeSessionId,
+    inspectSession,
+    cancelSession,
+    loadMoreHistory,
     legacyImports,
     legacyImportsError,
     scannerView,
@@ -336,6 +406,34 @@ export function ScannerWorkspace({
           <LegacyImportsView workspace={workspace} />
         ) : (
           <>
+            <section className="panel rounded-xl p-4" aria-label="Actionable Current Session">
+              <h3 className="font-semibold">{workspace.currentSession
+                ? `Actionable Current Session #${workspace.currentSession.id}`
+                : "No Actionable Current Session"}</h3>
+              <p className="text-sm text-slate-600">{workspace.currentSession
+                ? `${workspace.currentSession.trading_date} · ${workspace.currentSession.market_phase.replaceAll("_", " ")} · ${workspace.currentSession.candidates.length} Candidates · Last refresh ${new Date(workspace.currentSession.completed_at!).toLocaleString()}`
+                : "No completed Scanner Session satisfies currentness rules. Historical attempts remain available for inspection."}</p>
+              {workspace.currentSession && <ul className="mt-2 flex flex-wrap gap-3" aria-label="Actionable Current Session Candidates">
+                {workspace.currentSession.candidates.map((candidate) => <li key={candidate.id}>
+                  {candidate.observed_listings[0]?.ticker ?? candidate.security.issuer_name ?? candidate.security.identifier}
+                </li>)}
+              </ul>}
+              <label className="mt-3 block text-sm">Inspect attempt
+                <select aria-label="Inspect attempt" className="ml-2 rounded border p-2"
+                  value={workspace.inspectedSession?.id ?? ""}
+                  onChange={(event) => void workspace.inspectSession(event.target.value ? Number(event.target.value) : null)}>
+                  <option value="">Latest attempt</option>
+                  {workspace.sessionHistory.map((session) => <option key={session.id} value={session.id}>
+                    #{session.id} · {session.trading_date} · {session.market_phase} · {session.status}
+                  </option>)}
+                </select>
+              </label>
+              {workspace.sessionHistory.length >= 50 && <button type="button" className="text-button" onClick={() => void workspace.loadMoreHistory()}>Load older attempts</button>}
+              {workspace.inspectedSession && <p className="mt-2 text-sm text-amber-800">Historical inspection only. Selecting an attempt does not change the Actionable Current Session.</p>}
+              {workspace.activeSessionId !== null && <button type="button" className="text-button"
+                disabled={workspace.pendingActions.has("cancel-session")} onClick={() => void workspace.cancelSession()}>Cancel active run</button>}
+              {workspace.sessionError && <p role="alert">{workspace.sessionError}</p>}
+            </section>
             <ScannerSessionPanel
               scannerSession={workspace.displayedSession}
               starting={workspace.pendingActions.has("scanner-session")}
@@ -535,7 +633,7 @@ function ScannerSessionPanel({
               : "Start an immutable attempt with a fixed U.S. exchange-session identity."}
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Repeating this action while a run is active returns the same Scanner Session.
+            This panel inspects an attempt. Running, partial, failed, and cancelled Candidates are not actionable. Repeating Run scanner while active returns the same Scanner Session.
           </p>
         </div>
         <button

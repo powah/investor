@@ -56,6 +56,14 @@ function buildWorkspace(candidate: ScannerSymbol, action: string | null = null):
   return {
     candidates: [candidate],
     sessions: [],
+    sessionHistory: [],
+    currentSession: null,
+    inspectedSession: null,
+    sessionError: null,
+    activeSessionId: null,
+    inspectSession: vi.fn(),
+    cancelSession: vi.fn(),
+    loadMoreHistory: vi.fn(),
     legacyImports: [],
     legacyImportsError: null,
     scannerView: "current",
@@ -171,6 +179,8 @@ describe("scanner workspace", () => {
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([buildCandidate()]),
       listLegacyImports: vi.fn().mockResolvedValue([legacyImport]),
+      getCurrentSession: vi.fn().mockResolvedValue(null),
+      cancelSession: vi.fn(),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi.fn(),
       importSampleCandidates: vi.fn(),
@@ -386,6 +396,8 @@ describe("scanner workspace", () => {
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
       listLegacyImports: vi.fn().mockResolvedValue([]),
+      getCurrentSession: vi.fn().mockResolvedValue(null),
+      cancelSession: vi.fn(),
       listSessions: vi.fn().mockResolvedValue([
         buildSessionSummary({ id: 7, status: "completed", stage: "completed" }),
       ]),
@@ -413,6 +425,8 @@ describe("scanner workspace", () => {
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
       listLegacyImports: vi.fn().mockResolvedValue([]),
+      getCurrentSession: vi.fn().mockResolvedValue(null),
+      cancelSession: vi.fn(),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi.fn(),
       importSampleCandidates: vi.fn(() => sampleImport.promise),
@@ -453,6 +467,8 @@ describe("scanner workspace", () => {
     const remote: ScannerRemote = {
       listCandidates: vi.fn().mockResolvedValue([]),
       listLegacyImports: vi.fn().mockResolvedValue([]),
+      getCurrentSession: vi.fn().mockResolvedValue(null),
+      cancelSession: vi.fn(),
       listSessions: vi.fn().mockResolvedValue([]),
       getSession: vi
         .fn()
@@ -486,4 +502,46 @@ describe("scanner workspace", () => {
     });
     expect(remote.getSession).toHaveBeenCalledTimes(2);
   });
+});
+
+ test("history inspection and cancellation preserve the actionable current view", async () => {
+  const good = buildSession({ id: 20, status: "completed", stage: "completed" });
+  const active = buildSession({ id: 21 });
+  const cancelled = buildSession({ ...active, status: "cancelled", stage: "cancelled" });
+  const historical = buildSession({ id: 19, status: "partial", stage: "partial" });
+  const remote: ScannerRemote = {
+    listCandidates: vi.fn().mockResolvedValue([]),
+    listLegacyImports: vi.fn().mockResolvedValue([]),
+    getCurrentSession: vi.fn().mockResolvedValue(good),
+    listSessions: vi.fn().mockResolvedValue([buildSessionSummary({ id: 21 }), buildSessionSummary({ id: 19, status: "partial" })]),
+    getSession: vi.fn((id: number) => Promise.resolve(id === 19 ? historical : active)),
+    cancelSession: vi.fn().mockResolvedValue(cancelled),
+    importSampleCandidates: vi.fn(), startSession: vi.fn(), importCandidatesCsv: vi.fn(), updateCandidateStatus: vi.fn(),
+  };
+  const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+  await act(async () => { await result.current.load(); });
+  await act(async () => { await result.current.inspectSession(19); });
+  expect(result.current.displayedSession).toEqual(historical);
+  expect(result.current.currentSession).toEqual(good);
+  expect(result.current.activeSessionId).toBe(21);
+  await act(async () => { await result.current.cancelSession(); });
+  expect(remote.cancelSession).toHaveBeenCalledWith(21);
+  expect(result.current.displayedSession).toEqual(historical);
+  expect(result.current.currentSession).toEqual(good);
+  expect(result.current.activeSessionId).toBeNull();
+  await act(async () => { await result.current.inspectSession(null); });
+  expect(result.current.displayedSession).toEqual(cancelled);
+});
+
+test("shows no-current state and labels historical inspection separately", () => {
+  const workspace = buildWorkspace(buildCandidate());
+  workspace.inspectedSession = buildSession({ status: "partial", stage: "partial" });
+  workspace.displayedSession = workspace.inspectedSession;
+  render(createElement(ScannerWorkspace, {
+    workspace, loading: false, watchedTickers: new Set<string>(), maxSpreadPct: 1.5,
+    onRun: vi.fn(), onSelect: vi.fn(), onToggleWatch: vi.fn(), onIgnore: vi.fn(), candidateResearch: null,
+  }));
+  expect(screen.getByText("No Actionable Current Session")).toBeInTheDocument();
+  expect(screen.getByText(/Historical inspection only/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Inspect attempt")).toBeInTheDocument();
 });
