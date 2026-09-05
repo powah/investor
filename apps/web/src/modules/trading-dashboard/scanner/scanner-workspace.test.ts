@@ -293,7 +293,11 @@ describe("scanner workspace", () => {
         {
           id: 40,
           security,
-          observed_listings: [listing],
+          observed_listings: [
+            listing,
+            { ...listing, effective_to: "2026-08-10" },
+            { ...listing, id: 21, ticker: "ALFB" },
+          ],
           discovery_hit_ids: [30],
           discovery_sources: ["csv"],
           discovery_reasons: ["CSV activity screen"],
@@ -318,6 +322,7 @@ describe("scanner workspace", () => {
     expect(screen.getByRole("region", { name: "Discovery Hits" })).toHaveTextContent("ALFA");
     expect(screen.getByRole("region", { name: "Discovery Hits" })).toHaveTextContent("unresolved");
     expect(screen.getByRole("region", { name: "Admitted Candidates" })).toHaveTextContent("Alpha Research Corp");
+    expect(within(screen.getByRole("region", { name: "Admitted Candidates" })).getByText("ALFA, ALFB", { exact: true })).toBeInTheDocument();
     expect(screen.getByText(/supplementary\.csv:2/)).toBeInTheDocument();
   });
 

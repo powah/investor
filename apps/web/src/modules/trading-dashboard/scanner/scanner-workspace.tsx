@@ -653,7 +653,7 @@ function SessionDiscoveryDetails({ scannerSession }: { scannerSession: ScannerSe
             <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">No admitted Candidates.</p>
           ) : scannerSession.candidates.map((candidate) => (
             <article key={candidate.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-              <div className="font-semibold text-ink">{candidate.observed_listings.map((listing) => listing.ticker).join(", ")}</div>
+              <div className="font-semibold text-ink">{[...new Set(candidate.observed_listings.map((listing) => listing.ticker))].join(", ")}</div>
               <p className="mt-1 text-xs text-slate-600">
                 {candidate.security.issuer_name ?? candidate.security.identifier} · {candidate.discovery_sources.join(" + ")}
               </p>
