@@ -114,7 +114,7 @@ export type ScannerSessionCandidate = {
 export type ScannerSession = {
   id: number;
   status: "running" | "completed" | "partial" | "failed" | "cancelled";
-  stage: "starting" | "market_movement_discovery" | "completed" | "failed" | "cancelled";
+  stage: "starting" | "market_movement_discovery" | "completed" | "partial" | "failed" | "cancelled";
   started_at: string;
   completed_at: string | null;
   trading_date: string;

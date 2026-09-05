@@ -384,8 +384,8 @@ class ScannerSessions:
         diagnostic.message = failure.message
         diagnostic.details = dict(failure.details)
         diagnostic.completed_at = completed_at
-        session.status = "failed"
-        session.stage = "failed"
+        session.status = "partial" if session.candidates else "failed"
+        session.stage = session.status
         session.completed_at = completed_at
         session.active_slot = None
 

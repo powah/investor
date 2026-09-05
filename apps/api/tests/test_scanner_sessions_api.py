@@ -730,23 +730,38 @@ def test_supplementary_csv_applies_the_json_input_count_limit(scanner_client):
                 code="required_discovery_unavailable",
                 message="Required discovery unavailable.",
             )
-        )
+        ),
+        ControlledDiscovery(failure=RuntimeError("Discovery crashed.")),
     ],
     indirect=True,
 )
-def test_supplementary_inputs_cannot_complete_without_market_movement_discovery(scanner_client):
+@pytest.mark.parametrize("admitted", [True, False])
+def test_discovery_failure_is_partial_only_with_admitted_candidates(scanner_client, admitted):
     client, _ = scanner_client
 
     started = client.post(
         "/scanner-sessions",
-        json={"supplementary_inputs": [_supplementary_input()]},
+        json={"supplementary_inputs": [_supplementary_input(
+            security_identifier="partial-candidate" if admitted else None,
+        )]},
     ).json()
     failed = _wait_for_terminal(client, started["id"])
 
-    assert failed["status"] == "failed"
-    assert len(failed["candidates"]) == 1
-    assert failed["discovery_hits"][0]["admission_outcome"] == "admitted"
-    assert failed["diagnostics"][0]["code"] == "required_discovery_unavailable"
+    expected_status = "partial" if admitted else "failed"
+    assert failed["status"] == expected_status
+    assert failed["stage"] == expected_status
+    assert failed["completed_at"] is not None
+    assert len(failed["candidates"]) == int(admitted)
+    assert failed["discovery_hits"][0]["admission_outcome"] == (
+        "admitted" if admitted else "unresolved"
+    )
+    assert failed["diagnostics"][0]["status"] in {"unavailable", "failed"}
+    assert failed["diagnostics"][0]["code"] in {
+        "required_discovery_unavailable", "market_movement_discovery_failed"
+    }
+    retry = client.post("/scanner-sessions").json()
+    assert retry["id"] != failed["id"]
+    _wait_for_terminal(client, retry["id"])
 
 
 def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):
