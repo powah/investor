@@ -142,8 +142,13 @@ export function useScannerWorkspace(
     ?? sessionHistory.find((summary) => summary.status === "running" && !sessions.some((session) => session.id === summary.id))?.id
     ?? null;
 
+  const polledSessionId = activeSessionId
+    ?? (inspectedSession === null && sessionHistory[0]?.id !== sessions[0]?.id
+      ? sessionHistory[0]?.id ?? null
+      : null);
+
   useEffect(() => {
-    const scannerSessionId = activeSessionId;
+    const scannerSessionId = polledSessionId;
     let cancelled = false;
     let refreshPending = false;
 
@@ -182,7 +187,7 @@ export function useScannerWorkspace(
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeSessionId, mergeHistoryPage, refreshCurrentSession, remote]);
+  }, [polledSessionId, mergeHistoryPage, refreshCurrentSession, remote]);
 
   const inspectSession = useCallback(async (sessionId: number | null) => {
     const request = ++inspectionRequest.current;

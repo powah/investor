@@ -1173,6 +1173,7 @@ def test_optional_source_interruption_reports_the_source_without_claiming_market
         terminal = client.get(f"/scanner-sessions/{started['id']}").json()
         assert terminal['status'] == 'completed'
         assert terminal['diagnostics'][0]['status'] == 'completed'
+        assert terminal['progress'] == {'completed': 2, 'total': 2, 'percent': 100}
         assert terminal['diagnostics'][1]['code'] == 'scanner_run_interrupted'
         assert terminal['diagnostics'][1]['message'] == (
             'The application stopped before this discovery source completed. Start a new Scanner Session.'
@@ -1200,6 +1201,7 @@ def test_unexpected_run_setup_failure_retains_the_actual_diagnosis(scanner_datab
         started = client.post('/scanner-sessions').json()
         terminal = _wait_for_terminal(client, started['id'])
         assert terminal['status'] == 'failed'
+        assert terminal['progress'] == {'completed': 1, 'total': 1, 'percent': 100}
         assert terminal['diagnostics'][0]['code'] == 'scanner_run_failed'
         assert 'RuntimeError: Stage persistence defect' in terminal['diagnostics'][0]['message']
     event.remove(factory, 'before_flush', fail_stage_update)

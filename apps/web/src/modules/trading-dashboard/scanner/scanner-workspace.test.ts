@@ -626,3 +626,32 @@ test("polling discovers an external run and makes its progress and cancellation 
     vi.useRealTimers();
   }
 });
+
+test.each(["completed", "partial", "failed", "cancelled"] as const)("idle polling displays an external %s attempt that finished between polls", async (status) => {
+  vi.useFakeTimers();
+  try {
+    const remote = reviewRemote();
+    const original = buildSession({ id: 20, status: "completed", stage: "completed" });
+    const newer = buildSession({ id: 90, status, stage: status });
+    vi.mocked(remote.listSessions).mockResolvedValue([buildSessionSummary({ id: 20, status: "completed" })]);
+    vi.mocked(remote.getSession).mockImplementation(async (id) => id === 90 ? newer : original);
+    const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+    await act(async () => { await result.current.load(); });
+    expect(result.current.displayedSession).toEqual(original);
+    vi.mocked(remote.listSessions).mockResolvedValue([buildSessionSummary({ id: 90, status })]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(result.current.displayedSession).toEqual(newer);
+    expect(result.current.currentSession?.id).toBe(20);
+    // Refreshing the default cache must respect explicit historical inspection.
+    await act(async () => { await result.current.inspectSession(20); });
+    const latest = buildSession({ id: 100, status, stage: status });
+    vi.mocked(remote.listSessions).mockResolvedValue([buildSessionSummary({ id: 100, status })]);
+    vi.mocked(remote.getSession).mockImplementation(async (id) => id === 100 ? latest : original);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(result.current.displayedSession).toEqual(original);
+    await act(async () => { await result.current.inspectSession(null); });
+    expect(result.current.displayedSession).toEqual(latest);
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -496,6 +496,7 @@ class ScannerSessions:
             diagnostic.completed_at = completed_at
         required_failed = any(d.required and d.status != "completed" for d in session.diagnostics)
         session.status = ("partial" if session.candidates else "failed") if required_failed else "completed"
+        session.progress_completed = session.progress_total
         session.stage = session.status
         session.completed_at = completed_at
         session.active_slot = None
