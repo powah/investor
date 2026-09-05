@@ -131,11 +131,7 @@ class ScannerSessions:
 
             started_at = self._clock()
             identity = resolve_exchange_session_identity(started_at)
-            discovery = self._discovery_factory(started_at)
-            sources = {"market_movement": discovery, **{
-                capability: factory(started_at)
-                for capability, factory in self._supplementary_factories.items()
-            }}
+            sources = {"market_movement": self._discovery_factory, **self._supplementary_factories}
             session = ScannerSession(
                 status="running",
                 stage="starting",
@@ -152,14 +148,14 @@ class ScannerSessions:
                 progress_total=len(sources),
                 diagnostics=[
                     ScannerSessionDiagnostic(
-                        source=source.source,
+                        source=capability,
                         capability=capability,
                         required=capability in self._policy_settings["required_sources"],
                         status="pending",
                         records_count=0,
                         details={},
                     )
-                    for capability, source in sources.items()
+                    for capability in sources
                 ],
             )
             db.add(session)
@@ -336,9 +332,12 @@ class ScannerSessions:
                 self._mark_failed(active, failure=_INTERRUPTED_FAILURE, completed_at=self._clock())
                 db.commit()
 
-    async def _run(self, session_id: int, sources: Mapping[str, MarketMovementDiscovery]) -> None:
+    async def _run(
+        self, session_id: int,
+        sources: Mapping[str, Callable[[datetime], MarketMovementDiscovery]],
+    ) -> None:
         try:
-            for capability, discovery in sources.items():
+            for capability, factory in sources.items():
                 with self._session_factory() as db:
                     session = self._owned_active(db, session_id, for_update=True)
                     if session is None:
@@ -348,8 +347,21 @@ class ScannerSessions:
                     session.heartbeat_at = self._clock()
                     diagnostic.status = "running"
                     diagnostic.started_at = self._clock()
+                    started_at = session.started_at
                     db.commit()
+                operation = "setup"
                 try:
+                    # Construct adapters only after the attempt is durable. Setup
+                    # failures follow the same required/optional rules as discovery.
+                    discovery = factory(started_at)
+                    with self._session_factory() as db:
+                        session = self._owned_active(db, session_id, for_update=True)
+                        if session is None:
+                            return
+                        diagnostic = next(d for d in session.diagnostics if d.capability == capability)
+                        diagnostic.source = discovery.source
+                        db.commit()
+                    operation = "discovery"
                     result = await self._discover_with_heartbeat(session_id, discovery)
                     result.validate()
                     self._finish_source(session_id, capability, result=result)
@@ -361,8 +373,8 @@ class ScannerSessions:
                     raise
                 except Exception as exc:
                     self._finish_source(session_id, capability, failure=_ScannerRunFailure(
-                        "failed", f"{capability}_discovery_failed",
-                        f"Discovery failed: {type(exc).__name__}: {str(exc)[:1000]}", {},
+                        "failed", f"{capability}_{operation}_failed",
+                        f"{capability} {operation} failed: {type(exc).__name__}: {str(exc)[:1000]}", {},
                     ))
         except _ScannerRunOwnershipLost:
             return

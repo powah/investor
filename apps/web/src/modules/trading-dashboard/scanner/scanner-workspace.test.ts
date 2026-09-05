@@ -600,3 +600,29 @@ test("an unavailable current endpoint preserves its last response and labels it 
   expect(result.current.currentSessionVerified).toBe(true);
   expect(result.current.currentSessionError).toBeNull();
 });
+
+test("polling discovers an external run and makes its progress and cancellation available", async () => {
+  vi.useFakeTimers();
+  try {
+    const remote = reviewRemote();
+    const external = buildSession({ id: 90 });
+    const cancelled = buildSession({ id: 90, status: "cancelled", stage: "cancelled" });
+    const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+    await act(async () => { await result.current.load(); });
+    expect(result.current.activeSessionId).toBeNull();
+    vi.mocked(remote.listSessions).mockResolvedValue([buildSessionSummary({ id: 90 })]);
+    vi.mocked(remote.getSession).mockResolvedValue(external);
+    vi.mocked(remote.cancelSession).mockResolvedValue(cancelled);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(result.current.activeSessionId).toBe(90);
+    expect(remote.getSession).toHaveBeenCalledWith(90);
+    expect(result.current.displayedSession).toEqual(external);
+    await act(async () => { await result.current.cancelSession(); });
+    expect(remote.cancelSession).toHaveBeenCalledWith(90);
+    // A stale running summary must not revive a known terminal attempt.
+    expect(result.current.activeSessionId).toBeNull();
+    expect(result.current.displayedSession).toEqual(cancelled);
+  } finally {
+    vi.useRealTimers();
+  }
+});

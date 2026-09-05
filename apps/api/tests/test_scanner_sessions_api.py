@@ -1204,3 +1204,46 @@ def test_unexpected_run_setup_failure_retains_the_actual_diagnosis(scanner_datab
         assert 'RuntimeError: Stage persistence defect' in terminal['diagnostics'][0]['message']
     event.remove(factory, 'before_flush', fail_stage_update)
     engine.dispose()
+
+
+@pytest.mark.parametrize('capability,required,admitted,expected', [
+    ('market_movement', True, False, 'failed'),
+    ('market_movement', True, True, 'partial'),
+    ('news', True, False, 'failed'),
+    ('news', True, True, 'partial'),
+    ('news', False, False, 'completed'),
+])
+def test_adapter_setup_failure_is_an_inspectable_attempt(scanner_database_url, capability, required, admitted, expected):
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+
+    def broken_factory(started_at):
+        raise RuntimeError('Adapter initialization failed')
+
+    scanner = ScannerSessions(
+        factory,
+        discovery_factory=broken_factory if capability == 'market_movement' else lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': broken_factory} if capability == 'news' else {},
+        policy_settings={'required_sources': ['market_movement', 'news'] if capability == 'news' and required else ['market_movement']},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [_supplementary_input()] if admitted else [],
+        })
+        assert response.status_code == 202
+        terminal = _wait_for_terminal(client, response.json()['id'])
+        assert terminal['status'] == expected
+        diagnostic = next(item for item in terminal['diagnostics'] if item['capability'] == capability)
+        assert diagnostic['status'] == 'failed'
+        assert diagnostic['code'] == f'{capability}_setup_failed'
+        assert 'RuntimeError: Adapter initialization failed' in diagnostic['message']
+        assert any(item['id'] == terminal['id'] for item in client.get('/scanner-sessions').json())
+        retry = client.post('/scanner-sessions')
+        assert retry.status_code == 202
+        assert retry.json()['id'] != terminal['id']
+        _wait_for_terminal(client, retry.json()['id'])
+    engine.dispose()

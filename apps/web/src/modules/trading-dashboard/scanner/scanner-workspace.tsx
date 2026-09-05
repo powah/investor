@@ -138,7 +138,9 @@ export function useScannerWorkspace(
   }, [mergeHistoryPage, refreshCurrentSession, remote]);
 
   const displayedSession = inspectedSession ?? sessions.find((session) => session.status === "running") ?? sessions[0] ?? null;
-  const activeSessionId = sessions.find((session) => session.status === "running")?.id ?? null;
+  const activeSessionId = sessions.find((session) => session.status === "running")?.id
+    ?? sessionHistory.find((summary) => summary.status === "running" && !sessions.some((session) => session.id === summary.id))?.id
+    ?? null;
 
   useEffect(() => {
     const scannerSessionId = activeSessionId;
