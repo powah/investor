@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Mapping
@@ -50,6 +51,7 @@ SCANNER_POLICY_SETTINGS: dict[str, Any] = {
     "market_cap_ceiling_usd": 2_000_000_000,
     "minimum_price_usd": 1,
     "required_sources": ["market_movement"],
+    "currentness_max_age_seconds": 900,
 }
 
 
@@ -65,7 +67,7 @@ _INTERRUPTED_FAILURE = _ScannerRunFailure(
     diagnostic_status="failed",
     code="scanner_run_interrupted",
     message=(
-        "The application stopped before required Market-Movement Discovery completed. "
+        "The application stopped before this discovery source completed. "
         "Start a new Scanner Session."
     ),
     details={},
@@ -96,10 +98,22 @@ class ScannerSessions:
         *,
         discovery_factory: Callable[[datetime], MarketMovementDiscovery],
         clock: Callable[[], datetime] = utc_now,
+        supplementary_factories: Mapping[str, Callable[[datetime], MarketMovementDiscovery]] | None = None,
+        policy_settings: Mapping[str, Any] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._discovery_factory = discovery_factory
         self._clock = clock
+        self._supplementary_factories = dict(supplementary_factories or {})
+        if "market_movement" in self._supplementary_factories:
+            raise ValueError("Supplementary sources cannot replace Market-Movement Discovery")
+        self._policy_settings = deepcopy(dict(SCANNER_POLICY_SETTINGS))
+        if policy_settings is not None:
+            self._policy_settings.update(deepcopy(dict(policy_settings)))
+        required = set(self._policy_settings["required_sources"])
+        if "market_movement" not in required or required - {"market_movement", *self._supplementary_factories}:
+            raise ValueError("Required discovery sources must be configured, including market_movement")
+        self._runs: dict[int, asyncio.Task[None]] = {}
         self._owner_id = uuid4().hex
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -117,7 +131,7 @@ class ScannerSessions:
 
             started_at = self._clock()
             identity = resolve_exchange_session_identity(started_at)
-            discovery = self._discovery_factory(started_at)
+            sources = {"market_movement": self._discovery_factory, **self._supplementary_factories}
             session = ScannerSession(
                 status="running",
                 stage="starting",
@@ -128,19 +142,20 @@ class ScannerSessions:
                 trading_date=identity.trading_date,
                 market_phase=identity.market_phase,
                 scanner_policy_version=SCANNER_POLICY_VERSION,
-                scanner_policy_settings=dict(SCANNER_POLICY_SETTINGS),
+                scanner_policy_settings=deepcopy(self._policy_settings),
                 scoring_model_version=SCORING_MODEL_VERSION,
                 progress_completed=0,
-                progress_total=1,
+                progress_total=len(sources),
                 diagnostics=[
                     ScannerSessionDiagnostic(
-                        source=discovery.source,
-                        capability="market_movement",
-                        required=True,
+                        source=capability,
+                        capability=capability,
+                        required=capability in self._policy_settings["required_sources"],
                         status="pending",
                         records_count=0,
                         details={},
                     )
+                    for capability in sources
                 ],
             )
             db.add(session)
@@ -165,7 +180,9 @@ class ScannerSessions:
             session_id = session.id
             result = self._read(self._by_id(db, session_id))
 
-        task = asyncio.create_task(self._run(session_id, discovery))
+        task = asyncio.create_task(self._run(session_id, sources))
+        self._runs[session_id] = task
+        task.add_done_callback(lambda _: self._runs.pop(session_id, None))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return result
@@ -223,6 +240,55 @@ class ScannerSessions:
         with self._session_factory() as db:
             return self._read(self._by_id(db, session_id))
 
+    def current(self) -> ScannerSessionRead | None:
+        self.recover_interrupted()
+        now = self._clock()
+        identity = resolve_exchange_session_identity(now)
+        if identity.market_phase == "closed":
+            return None
+        with self._session_factory() as db:
+            sessions = (
+                db.query(ScannerSession.id, ScannerSession.started_at, ScannerSession.scanner_policy_settings)
+                .filter(
+                    ScannerSession.status == "completed",
+                    ScannerSession.trading_date == identity.trading_date,
+                    ScannerSession.market_phase == identity.market_phase,
+                )
+                .order_by(ScannerSession.started_at.desc(), ScannerSession.id.desc())
+            )
+            for session in sessions:
+                max_age = session.scanner_policy_settings.get("currentness_max_age_seconds", 900)
+                if timedelta(0) <= now - session.started_at <= timedelta(seconds=max_age):
+                    return self._read(self._by_id(db, session.id))
+        return None
+
+    async def cancel(self, session_id: int) -> ScannerSessionRead:
+        with self._session_factory() as db:
+            session = (
+                db.query(ScannerSession).options(*self._load_options())
+                .filter(ScannerSession.id == session_id).with_for_update().one_or_none()
+            )
+            if session is None:
+                raise ScannerSessionNotFound(f"Scanner Session {session_id} was not found.")
+            if session.status == "running":
+                session.status = "cancelled"
+                session.stage = "cancelled"
+                session.completed_at = self._clock()
+                session.active_slot = None
+                for diagnostic in session.diagnostics:
+                    if diagnostic.status in {"pending", "running"}:
+                        diagnostic.status = "skipped"
+                        diagnostic.code = "operator_cancelled"
+                        diagnostic.message = "Cancelled by the operator."
+                        diagnostic.completed_at = session.completed_at
+                db.commit()
+            result = self._read(session)
+        task = self._runs.get(session_id)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return result
+
     def recover_interrupted(self) -> None:
         completed_at = self._clock()
         stale_before = completed_at - timedelta(seconds=SCANNER_SESSION_LEASE_SECONDS)
@@ -255,71 +321,107 @@ class ScannerSessions:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _run(self, session_id: int, discovery: MarketMovementDiscovery) -> None:
+        # A task cancelled before its coroutine starts cannot run its cleanup.
         with self._session_factory() as db:
-            session = self._owned_active(db, session_id)
-            if session is None:
-                return
-            diagnostic = session.diagnostics[0]
-            session.stage = "market_movement_discovery"
-            session.heartbeat_at = self._clock()
-            diagnostic.status = "running"
-            diagnostic.started_at = self._clock()
-            db.commit()
+            active = (
+                db.query(ScannerSession).options(*self._load_options())
+                .filter(ScannerSession.active_slot.is_(True), ScannerSession.owner_id == self._owner_id)
+                .with_for_update().one_or_none()
+            )
+            if active is not None:
+                self._mark_failed(active, failure=_INTERRUPTED_FAILURE, completed_at=self._clock())
+                db.commit()
 
+    async def _run(
+        self, session_id: int,
+        sources: Mapping[str, Callable[[datetime], MarketMovementDiscovery]],
+    ) -> None:
         try:
-            result = await self._discover_with_heartbeat(session_id, discovery)
-            result.validate()
-            self._finish_completed(session_id, result)
+            for capability, factory in sources.items():
+                with self._session_factory() as db:
+                    session = self._owned_active(db, session_id, for_update=True)
+                    if session is None:
+                        return
+                    diagnostic = next(d for d in session.diagnostics if d.capability == capability)
+                    session.stage = "market_movement_discovery" if capability == "market_movement" else "supplementary_discovery"
+                    session.heartbeat_at = self._clock()
+                    diagnostic.status = "running"
+                    diagnostic.started_at = self._clock()
+                    started_at = session.started_at
+                    db.commit()
+                operation = "setup"
+                try:
+                    # Construct adapters only after the attempt is durable. Setup
+                    # failures follow the same required/optional rules as discovery.
+                    discovery = factory(started_at)
+                    with self._session_factory() as db:
+                        session = self._owned_active(db, session_id, for_update=True)
+                        if session is None:
+                            return
+                        diagnostic = next(d for d in session.diagnostics if d.capability == capability)
+                        diagnostic.source = discovery.source
+                        db.commit()
+                    operation = "discovery"
+                    result = await self._discover_with_heartbeat(session_id, discovery)
+                    result.validate()
+                    self._finish_source(session_id, capability, result=result)
+                except DiscoveryUnavailable as exc:
+                    self._finish_source(session_id, capability, failure=_ScannerRunFailure(
+                        "unavailable", exc.code, exc.message, exc.details,
+                    ))
+                except (_ScannerRunOwnershipLost, asyncio.CancelledError):
+                    raise
+                except Exception as exc:
+                    self._finish_source(session_id, capability, failure=_ScannerRunFailure(
+                        "failed", f"{capability}_{operation}_failed",
+                        f"{capability} {operation} failed: {type(exc).__name__}: {str(exc)[:1000]}", {},
+                    ))
         except _ScannerRunOwnershipLost:
             return
         except asyncio.CancelledError:
             self._finish_failed(session_id, _INTERRUPTED_FAILURE)
-        except DiscoveryUnavailable as exc:
-            self._finish_failed(
-                session_id,
-                _ScannerRunFailure(
-                    diagnostic_status="unavailable",
-                    code=exc.code,
-                    message=exc.message,
-                    details=exc.details,
-                ),
-            )
         except Exception as exc:
-            self._finish_failed(
-                session_id,
-                _ScannerRunFailure(
-                    diagnostic_status="failed",
-                    code="market_movement_discovery_failed",
-                    message=(
-                        "Market-Movement Discovery failed: "
-                        f"{type(exc).__name__}: {str(exc)[:1000]}"
-                    ),
-                    details={},
-                ),
-            )
+            self._finish_failed(session_id, _ScannerRunFailure(
+                "failed", "scanner_run_failed",
+                f"Scanner Session failed: {type(exc).__name__}: {str(exc)[:1000]}", {},
+            ))
 
-    def _finish_completed(self, session_id: int, result: DiscoveryResult) -> None:
+    def _finish_source(
+        self, session_id: int, capability: str, *,
+        result: DiscoveryResult | None = None, failure: _ScannerRunFailure | None = None,
+    ) -> None:
         completed_at = self._clock()
         with self._session_factory() as db:
             session = self._owned_active(db, session_id, for_update=True)
             if session is None:
                 return
-            admit_discovery_hits(
-                db, session=session, inputs=result.hits, observed_at=completed_at,
-            )
-            diagnostic = session.diagnostics[0]
-            diagnostic.status = "completed"
-            diagnostic.records_count = result.records_count
-            diagnostic.message = result.message
-            diagnostic.details = result.details
+            diagnostic = next(d for d in session.diagnostics if d.capability == capability)
+            if result is not None:
+                admit_discovery_hits(db, session=session, inputs=result.hits, observed_at=completed_at)
+                diagnostic.status = "completed"
+                diagnostic.records_count = result.records_count
+                diagnostic.message = result.message
+                diagnostic.details = result.details
+            else:
+                assert failure is not None
+                diagnostic.status = failure.diagnostic_status
+                diagnostic.code = failure.code
+                diagnostic.message = failure.message
+                diagnostic.details = dict(failure.details)
             diagnostic.completed_at = completed_at
-            session.status = "completed"
-            session.stage = "completed"
-            session.progress_completed = 1
-            session.completed_at = completed_at
-            session.active_slot = None
+            session.progress_completed += 1
+            if session.progress_completed == session.progress_total:
+                # Admission inserts Candidates by foreign key; reload the collection
+                # so this source's new Candidates participate in terminal classification.
+                db.flush()
+                db.expire(session, ["candidates"])
+                required_failed = any(d.required and d.status != "completed" for d in session.diagnostics)
+                session.status = ("partial" if session.candidates else "failed") if required_failed else "completed"
+                session.stage = session.status
+                session.completed_at = completed_at
+                session.active_slot = None
+            # The completed status is the promotion marker: candidates and status
+            # become visible together, and current() never reads running attempts.
             db.commit()
 
     async def _discover_with_heartbeat(
@@ -384,13 +486,17 @@ class ScannerSessions:
         failure: _ScannerRunFailure,
         completed_at: datetime,
     ) -> None:
-        diagnostic = session.diagnostics[0]
-        diagnostic.status = failure.diagnostic_status
-        diagnostic.code = failure.code
-        diagnostic.message = failure.message
-        diagnostic.details = dict(failure.details)
-        diagnostic.completed_at = completed_at
-        session.status = "partial" if session.candidates else "failed"
+        for diagnostic in session.diagnostics:
+            if diagnostic.status not in {"pending", "running"}:
+                continue
+            diagnostic.status = failure.diagnostic_status
+            diagnostic.code = failure.code
+            diagnostic.message = failure.message
+            diagnostic.details = dict(failure.details)
+            diagnostic.completed_at = completed_at
+        required_failed = any(d.required and d.status != "completed" for d in session.diagnostics)
+        session.status = ("partial" if session.candidates else "failed") if required_failed else "completed"
+        session.progress_completed = session.progress_total
         session.stage = session.status
         session.completed_at = completed_at
         session.active_slot = None

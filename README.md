@@ -169,3 +169,30 @@ cd apps/api
 ```
 
 Python 3.14 is the supported backend development runtime; the API image is pinned to CPython 3.14.7. Recreate older virtual environments before installing the current dependency set.
+
+### Scanner Session completion and history
+
+`GET /scanner-sessions/current` returns the Actionable Current Session, or JSON
+`null` when none qualifies. Selection is derived from completed attempts, ordered
+by start time and ID. Completion and the final Candidate changes share a database
+transaction; running, partial, failed, and cancelled attempts never enter this view.
+The initial captured currentness policy permits an age of at most 900 seconds
+from run start and requires the current exchange Trading Date and Market Phase.
+Closed phases have no Actionable Current Session. This bounds session currentness;
+it does not substitute for evidence-specific Freshness checks.
+
+`POST /scanner-sessions/{id}/cancel` durably cancels a running attempt and is
+idempotent for terminal attempts. Local provider work is cancelled immediately;
+work owned by another process stops on its next lease heartbeat (at most ten
+seconds). Ownership checks prevent late results from changing cancelled history.
+The scanner's attempt selector affects inspection only; the dashboard displays
+Actionable Current Session independently. Older attempts remain paginated through
+`GET /scanner-sessions?limit=50&offset=50`.
+
+Source diagnostics capture requiredness from the run's Scanner Policy. A required
+source failure produces partial status when admitted Candidates remain, otherwise
+failed status. Optional source failures are retained as diagnostics and permit
+completion. Unknown Evidence and low Evidence Coverage do not change lifecycle
+status. Additional discovery adapters can be supplied through the Scanner Sessions
+module's `supplementary_factories` interface; production currently runs required
+Market-Movement Discovery with manual and CSV supplementary inputs.
