@@ -11,7 +11,7 @@ from app.models.scanner_sessions import (
     ScannerSessionCandidate,
     Security,
 )
-from app.schemas.scanner_sessions import SupplementaryDiscoveryInput
+from app.schemas.scanner_sessions import NormalizedDiscoveryHit
 
 
 ELIGIBLE_EXCHANGES = {"nasdaq", "nyse", "nyse_american"}
@@ -49,7 +49,7 @@ def _instrument_type(value: str | None) -> str | None:
     return aliases.get(token, token)
 
 
-def _security(db: Session, item: SupplementaryDiscoveryInput) -> Security | None:
+def _security(db: Session, item: NormalizedDiscoveryHit) -> Security | None:
     source = _token(item.security_identifier_source)
     identifier = (item.security_identifier or "").strip()
     if not source or source in _UNKNOWN_VALUES or identifier.lower() in _UNKNOWN_VALUES:
@@ -78,7 +78,7 @@ def _listing(
     exchange: str | None,
     status: str | None,
     instrument_type: str | None,
-    item: SupplementaryDiscoveryInput,
+    item: NormalizedDiscoveryHit,
 ) -> tuple[Listing | None, bool]:
     if (
         security is None
@@ -153,7 +153,7 @@ def _listing(
 def _admission(
     *,
     trading_date: date,
-    item: SupplementaryDiscoveryInput,
+    item: NormalizedDiscoveryHit,
     security: Security | None,
     listing: Listing | None,
     listing_conflict: bool,
@@ -205,11 +205,11 @@ def _admission(
     return "admitted", ["target_instrument_universe"]
 
 
-def admit_supplementary_inputs(
+def admit_discovery_hits(
     db: Session,
     *,
     session: ScannerSession,
-    inputs: list[SupplementaryDiscoveryInput],
+    inputs: list[NormalizedDiscoveryHit] | tuple[NormalizedDiscoveryHit, ...],
     observed_at: datetime,
 ) -> None:
     for item in inputs:

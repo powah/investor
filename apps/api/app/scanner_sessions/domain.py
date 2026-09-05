@@ -9,6 +9,7 @@ import exchange_calendars as exchange_calendars
 import pandas as pd
 
 from app.scanner_session_types import MarketPhase
+from app.schemas.scanner_sessions import NormalizedDiscoveryHit
 
 
 NEW_YORK = ZoneInfo("America/New_York")
@@ -26,6 +27,13 @@ class DiscoveryResult:
     records_count: int
     message: str
     details: dict[str, Any] = field(default_factory=dict)
+    hits: tuple[NormalizedDiscoveryHit, ...] = ()
+
+    def validate(self) -> None:
+        if self.records_count != len(self.hits):
+            raise ValueError("Discovery count does not match normalized hits")
+        if any(not isinstance(hit, NormalizedDiscoveryHit) for hit in self.hits):
+            raise ValueError("Discovery must return normalized hits")
 
 
 class DiscoveryUnavailable(RuntimeError):

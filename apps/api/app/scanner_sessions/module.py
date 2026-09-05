@@ -20,7 +20,7 @@ from app.models.scanner_sessions import (
     Security,
 )
 from app.scanner_session_types import ScannerSessionDiagnosticStatus
-from app.scanner_sessions.admission import admit_supplementary_inputs
+from app.scanner_sessions.admission import admit_discovery_hits
 from app.scanner_sessions.domain import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -94,7 +94,7 @@ class ScannerSessions:
         self,
         session_factory: Callable[[], Session],
         *,
-        discovery_factory: Callable[[], MarketMovementDiscovery],
+        discovery_factory: Callable[[datetime], MarketMovementDiscovery],
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._session_factory = session_factory
@@ -117,7 +117,7 @@ class ScannerSessions:
 
             started_at = self._clock()
             identity = resolve_exchange_session_identity(started_at)
-            discovery = self._discovery_factory()
+            discovery = self._discovery_factory(started_at)
             session = ScannerSession(
                 status="running",
                 stage="starting",
@@ -146,7 +146,7 @@ class ScannerSessions:
             db.add(session)
             try:
                 db.flush()
-                admit_supplementary_inputs(
+                admit_discovery_hits(
                     db,
                     session=session,
                     inputs=supplementary_inputs or [],
@@ -270,6 +270,8 @@ class ScannerSessions:
 
         try:
             result = await self._discover_with_heartbeat(session_id, discovery)
+            result.validate()
+            self._finish_completed(session_id, result)
         except _ScannerRunOwnershipLost:
             return
         except asyncio.CancelledError:
@@ -297,24 +299,28 @@ class ScannerSessions:
                     details={},
                 ),
             )
-        else:
-            completed_at = self._clock()
-            with self._session_factory() as db:
-                session = self._owned_active(db, session_id, for_update=True)
-                if session is None:
-                    return
-                diagnostic = session.diagnostics[0]
-                diagnostic.status = "completed"
-                diagnostic.records_count = result.records_count
-                diagnostic.message = result.message
-                diagnostic.details = result.details
-                diagnostic.completed_at = completed_at
-                session.status = "completed"
-                session.stage = "completed"
-                session.progress_completed = 1
-                session.completed_at = completed_at
-                session.active_slot = None
-                db.commit()
+
+    def _finish_completed(self, session_id: int, result: DiscoveryResult) -> None:
+        completed_at = self._clock()
+        with self._session_factory() as db:
+            session = self._owned_active(db, session_id, for_update=True)
+            if session is None:
+                return
+            admit_discovery_hits(
+                db, session=session, inputs=result.hits, observed_at=completed_at,
+            )
+            diagnostic = session.diagnostics[0]
+            diagnostic.status = "completed"
+            diagnostic.records_count = result.records_count
+            diagnostic.message = result.message
+            diagnostic.details = result.details
+            diagnostic.completed_at = completed_at
+            session.status = "completed"
+            session.stage = "completed"
+            session.progress_completed = 1
+            session.completed_at = completed_at
+            session.active_slot = None
+            db.commit()
 
     async def _discover_with_heartbeat(
         self,

@@ -1,8 +1,9 @@
+from datetime import datetime
 from functools import lru_cache
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.scanner_sessions.adapters import AlpacaMarketMovementDiscovery
+from app.scanner_sessions.delayed_bars import AlpacaDelayedBarDiscovery, listing_universe
 from app.scanner_sessions.domain import (
     DiscoveryResult,
     DiscoveryUnavailable,
@@ -20,10 +21,13 @@ from app.scanner_sessions.module import (
 @lru_cache
 def get_scanner_sessions() -> ScannerSessions:
     settings = get_settings()
-    return ScannerSessions(
-        SessionLocal,
-        discovery_factory=lambda: AlpacaMarketMovementDiscovery(settings),
-    )
+
+    def discovery_factory(started_at: datetime) -> MarketMovementDiscovery:
+        with SessionLocal() as db:
+            universe = listing_universe(db, started_at)
+        return AlpacaDelayedBarDiscovery(settings, universe, started_at=started_at)
+
+    return ScannerSessions(SessionLocal, discovery_factory=discovery_factory)
 
 
 __all__ = [
