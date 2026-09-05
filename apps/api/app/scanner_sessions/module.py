@@ -539,18 +539,7 @@ class ScannerSessions:
                     observed_at=hit.observed_at,
                     ticker=hit.ticker,
                     discovery_reason=hit.discovery_reason,
-                    observed_listing=ListingObservationRead(
-                        ticker=hit.ticker,
-                        exchange=hit.observed_exchange,
-                        status=hit.observed_listing_status,
-                        instrument_type=hit.observed_instrument_type,
-                        effective_from=hit.observed_effective_from,
-                        effective_to=hit.observed_effective_to,
-                        foreign_issuer=hit.observed_foreign_issuer,
-                        depositary_to_underlying_ratio=(
-                            hit.observed_depositary_to_underlying_ratio
-                        ),
-                    ),
+                    observed_listing=cls._listing_observation_read(hit),
                     admission_outcome=hit.admission_outcome,
                     admission_reasons=hit.admission_reasons,
                     security=cls._security_read(hit.security) if hit.security else None,
@@ -562,16 +551,38 @@ class ScannerSessions:
             candidates=[cls._candidate_read(candidate) for candidate in session.candidates],
         )
 
+    @staticmethod
+    def _listing_observation_read(hit: DiscoveryHit) -> ListingObservationRead:
+        return ListingObservationRead(
+            ticker=hit.ticker,
+            exchange=hit.observed_exchange,
+            status=hit.observed_listing_status,
+            instrument_type=hit.observed_instrument_type,
+            effective_from=hit.observed_effective_from,
+            effective_to=hit.observed_effective_to,
+            foreign_issuer=hit.observed_foreign_issuer,
+            depositary_to_underlying_ratio=hit.observed_depositary_to_underlying_ratio,
+        )
+
     @classmethod
     def _candidate_read(cls, candidate: ScannerSessionCandidate) -> CandidateRead:
         listings: list[ListingRead] = []
-        listing_ids: set[int] = set()
+        listing_snapshots: set[tuple[object, ...]] = set()
         sources: list[str] = []
         reasons: list[str] = []
         for hit in candidate.discovery_hits:
-            if hit.listing is not None and hit.listing.id not in listing_ids:
-                listings.append(cls._listing_read(hit.listing))
-                listing_ids.add(hit.listing.id)
+            if hit.listing_id is not None:
+                observation = cls._listing_observation_read(hit).model_dump()
+                snapshot_key = (hit.listing_id, *observation.values())
+                if snapshot_key not in listing_snapshots:
+                    listings.append(
+                        ListingRead(
+                            id=hit.listing_id,
+                            security_id=candidate.security_id,
+                            **observation,
+                        )
+                    )
+                    listing_snapshots.add(snapshot_key)
             if hit.source not in sources:
                 sources.append(hit.source)
             if hit.discovery_reason not in reasons:

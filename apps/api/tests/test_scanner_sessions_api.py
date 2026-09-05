@@ -507,6 +507,48 @@ def test_ads_reuses_known_foreign_issuer_when_observation_is_omitted(
     assert len(session["candidates"]) == (1 if known_foreign_issuer is True else 0)
 
 
+def test_candidate_listing_snapshots_survive_later_enrichment(scanner_client):
+    client, _ = scanner_client
+    original_input = _supplementary_input(
+        security_identifier="immutable-ads-listing",
+        instrument_type="american_depositary_share",
+        foreign_issuer=True,
+    )
+    first = client.post(
+        "/scanner-sessions", json={"supplementary_inputs": [original_input]}
+    )
+    assert first.status_code == 202
+    original = _wait_for_terminal(client, first.json()["id"])
+    enriched_input = {
+        **original_input,
+        "effective_to": "2026-07-07",
+        "depositary_to_underlying_ratio": 2.5,
+    }
+    second = client.post(
+        "/scanner-sessions",
+        json={"supplementary_inputs": [original_input, enriched_input, enriched_input]},
+    )
+    assert second.status_code == 202
+    enriched = _wait_for_terminal(client, second.json()["id"])
+
+    reread = client.get(f"/scanner-sessions/{original['id']}").json()
+    assert reread["candidates"] == original["candidates"]
+    listings = enriched["candidates"][0]["observed_listings"]
+    assert len(listings) == 2
+    assert listings[0]["id"] == listings[1]["id"]
+    assert listings[0]["security_id"] == listings[1]["security_id"]
+    for listing, hit in zip(listings, enriched["discovery_hits"]):
+        observation = {
+            key: value for key, value in listing.items()
+            if key not in {"id", "security_id"}
+        }
+        assert observation == hit["observed_listing"]
+    assert listings[0]["effective_to"] is None
+    assert listings[0]["depositary_to_underlying_ratio"] is None
+    assert listings[1]["effective_to"] == "2026-07-07"
+    assert listings[1]["depositary_to_underlying_ratio"] == 2.5
+
+
 def test_optional_listing_metadata_can_be_omitted_or_enriched_without_a_conflict(scanner_client):
     client, _ = scanner_client
     known_ratio = _supplementary_input(
