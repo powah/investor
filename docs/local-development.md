@@ -169,6 +169,32 @@ The REST adapter requests symbol-linked articles with the same Alpaca credential
 
 The SEC adapter downloads the public ticker map and recent company submissions, filters relevant forms, and paces per-company requests. Filings such as 8-K/6-K, registration/prospectus forms, EFFECT notices, periodic reports, and ownership reports are stored as external review events. A filing form alone is not a positive catalyst.
 
+## Manual delayed-bar Scanner Sessions
+
+**Run scanner** (or `POST /scanner-sessions` with no body) scans the persisted active
+eligible Listing registry; it does not require input on each run. Configure Alpaca
+credentials and `ALPACA_SCANNER_FEED=delayed_sip`. The registry must already contain
+verified Security identities and effective-dated Listings (see supplementary input
+below). Credentials alone do not populate this registry. An empty registry produces
+`listing_universe_empty`, not a misleading successful empty market scan. This slice
+does not fetch or infer instrument classifications from Alpaca asset names.
+
+The run freezes its universe and window at session start. It requests consolidated
+SIP one-minute bars for the preceding 60-minute window ending 15 minutes before
+that start, in batches of at most 100 symbols and at most 100 pages per batch.
+`delayed-bar-discovery-v1` emits separate hits for an absolute first-open to last-close
+move of at least 5% and total window volume of at least 100,000 shares. These are
+selection rules, not gap/RVOL scores, Research Eligibility, or recommendations.
+
+Session details preserve the selection policy, feed, consolidation coverage, expected
+delay, request/window counts, observation time, provider event times, and missing-bar
+symbols. Missing bars are not zero-volume evidence. A valid exhausted response may
+complete with zero Candidates, including outside market hours; completion alone does
+not assert freshness or promote an Actionable Current Session. Invalid payloads,
+request errors, and incomplete pagination cannot complete required discovery.
+Provider hits pass through the same Candidate Admission as supplementary hits, with
+all admission outcomes retained and Candidates deduplicated by Security.
+
 ## Supplementary Scanner Session CSV
 
 ```csv

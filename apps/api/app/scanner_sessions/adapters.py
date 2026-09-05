@@ -6,7 +6,8 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.scanner_sessions.domain import DiscoveryResult, DiscoveryUnavailable
+from app.scanner_sessions.domain import DiscoveryResult, DiscoveryUnavailable, utc_now
+from app.schemas.scanner_sessions import NormalizedDiscoveryHit
 
 
 class AlpacaMarketMovementDiscovery:
@@ -81,6 +82,14 @@ class AlpacaMarketMovementDiscovery:
 
         return DiscoveryResult(
             records_count=len(symbols),
+            hits=tuple(
+                NormalizedDiscoveryHit(
+                    source=self.source, source_reference=f"screener:{symbol}",
+                    ticker=symbol, observed_at=utc_now(),
+                    discovery_reason="Market screener occurrence; instrument identity requires resolution",
+                )
+                for symbol in sorted(symbols)
+            ),
             message="Alpaca Market-Movement Discovery completed.",
             details={
                 "sources": source_results,

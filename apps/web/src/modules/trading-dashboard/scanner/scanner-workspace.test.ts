@@ -326,6 +326,37 @@ describe("scanner workspace", () => {
     expect(screen.getByText(/supplementary\.csv:2/)).toBeInTheDocument();
   });
 
+  test("labels delayed consolidated discovery and a successful zero-Candidate result", () => {
+    render(createElement(ScannerWorkspace, {
+      workspace: {
+        ...buildWorkspace(buildCandidate()),
+        displayedSession: buildSession({
+          status: "completed", stage: "completed",
+          diagnostics: [{
+            source: "alpaca_delayed_bars", capability: "market_movement", required: true,
+            status: "completed", records_count: 0, code: null, message: "Discovery completed",
+            started_at: null, completed_at: null,
+            details: {
+              data_tier: "delayed_consolidated", coverage: "consolidated_us_equities",
+              expected_delay_seconds: 900, eligible_listings: 100,
+              requested_symbols: 100, symbols_with_bars: 98,
+              observed_at: "2026-07-06T13:45:00Z", provider_event_at: "2026-07-06T13:29:00Z",
+            },
+          }],
+        }),
+      },
+      loading: false, watchedTickers: new Set<string>(), maxSpreadPct: 1.5,
+      onRun: vi.fn(), onSelect: vi.fn(), onToggleWatch: vi.fn(), onIgnore: vi.fn(),
+      candidateResearch: null,
+    }));
+    const contract = screen.getByLabelText("Market-Movement Discovery source contract");
+    expect(contract).toHaveTextContent("Delayed consolidated bars · Not real-time");
+    expect(contract).toHaveTextContent("Expected delay: 15 minutes");
+    expect(contract).toHaveTextContent("Symbols with bars: 98 / 100");
+    expect(contract).toHaveTextContent("Latest provider event: 2026-07-06T13:29:00Z");
+    expect(screen.getByText("Discovery completed with no hits · 0 Candidates.")).toBeInTheDocument();
+  });
+
   test("offers watch and ignore actions on mobile with desktop-equivalent saving guards", () => {
     const candidate = buildCandidate();
     const props = {

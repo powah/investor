@@ -16,10 +16,10 @@ from app.scanner_session_types import (
 MAX_SUPPLEMENTARY_INPUTS = 1000
 
 
-class SupplementaryDiscoveryInput(BaseModel):
+class NormalizedDiscoveryHit(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    source: Literal["manual", "csv"] = "manual"
+    source: str = Field(min_length=1, max_length=80)
     source_reference: str = Field(min_length=1, max_length=500)
     observed_at: Optional[datetime] = None
     ticker: str = Field(min_length=1, max_length=24)
@@ -43,6 +43,10 @@ class SupplementaryDiscoveryInput(BaseModel):
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("observed_at must include a timezone")
         return value
+
+
+class SupplementaryDiscoveryInput(NormalizedDiscoveryHit):
+    source: Literal["manual", "csv"] = "manual"
 
 
 class ScannerSessionStart(BaseModel):

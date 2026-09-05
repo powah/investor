@@ -594,6 +594,19 @@ function ScannerSessionPanel({
                 <p className="mt-1 text-xs">
                   {diagnostic.message ?? `${diagnostic.source} · ${diagnostic.required ? "required" : "supplementary"}`}
                 </p>
+                {diagnostic.details.data_tier === "delayed_consolidated" && (
+                  <div className="mt-2 space-y-1 text-xs" aria-label="Market-Movement Discovery source contract">
+                    <p className="font-semibold">Delayed consolidated bars · Not real-time</p>
+                    <p>
+                      Coverage: {String(diagnostic.details.coverage ?? "Unknown")} · Expected delay: {Number(diagnostic.details.expected_delay_seconds) / 60} minutes
+                    </p>
+                    <p>
+                      Listings scanned: {String(diagnostic.details.eligible_listings ?? "Unknown")} · Symbols with bars: {String(diagnostic.details.symbols_with_bars ?? "Unknown")} / {String(diagnostic.details.requested_symbols ?? "Unknown")}
+                    </p>
+                    <p>Observed: {String(diagnostic.details.observed_at ?? "Unknown")}</p>
+                    <p>Latest provider event: {String(diagnostic.details.provider_event_at ?? "No bars returned")}</p>
+                  </div>
+                )}
                 {diagnostic.code && <p className="mt-1 text-xs font-medium">Diagnostic: {diagnostic.code}</p>}
                 {Object.keys(diagnostic.details).length > 0 && (
                   <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded bg-white/70 p-2 text-[11px] leading-5 text-slate-700">
@@ -612,7 +625,9 @@ function ScannerSessionPanel({
 
 function SessionDiscoveryDetails({ scannerSession }: { scannerSession: ScannerSession }) {
   if (scannerSession.discovery_hits.length === 0) {
-    return null;
+    return scannerSession.status === "completed" ? (
+      <p className="text-sm text-slate-600">Discovery completed with no hits · 0 Candidates.</p>
+    ) : null;
   }
   const outcomeTone = {
     admitted: "bg-teal-50 text-teal-800 ring-teal-200",

@@ -20,6 +20,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.api.scanner_sessions import router
+from app.schemas.scanner_sessions import NormalizedDiscoveryHit
 from app.scanner_sessions.supplementary_csv import (
     MAX_SUPPLEMENTARY_CSV_BYTES,
     MAX_SUPPLEMENTARY_INPUTS,
@@ -40,7 +41,8 @@ FIXED_START = datetime(2026, 7, 6, 13, 45, tzinfo=timezone.utc)
 class ControlledDiscovery:
     source = "controlled_market_movement"
 
-    def __init__(self, *, release: Event | None = None, failure: Exception | None = None):
+    def __init__(self, *, release: Event | None = None, failure: Exception | None = None, result: DiscoveryResult | None = None):
+        self.result = result
         self.release = release
         self.failure = failure
         self.calls = 0
@@ -56,10 +58,10 @@ class ControlledDiscovery:
                 await asyncio.sleep(0.01)
         if self.failure is not None:
             raise self.failure
-        return DiscoveryResult(
-            records_count=2,
+        return self.result or DiscoveryResult(
+            records_count=0,
             message="Controlled Market-Movement Discovery completed.",
-            details={"symbols": ["SINT", "ABVC"]},
+            details={"symbols": []},
         )
 
 
@@ -112,7 +114,7 @@ def scanner_client(scanner_database_url: str, request: pytest.FixtureRequest):
     discovery = getattr(request, "param", ControlledDiscovery())
     scanner_sessions = ScannerSessions(
         testing_session,
-        discovery_factory=lambda: discovery,
+        discovery_factory=lambda started_at: discovery,
         clock=lambda: FIXED_START,
     )
     app = FastAPI()
@@ -154,6 +156,53 @@ def _wait_for_terminal(client: TestClient, session_id: int) -> dict:
     pytest.fail(f"Scanner Session {session_id} did not reach a terminal state.")
 
 
+def test_provider_hits_are_admitted_atomically_without_manual_or_csv_input(scanner_client):
+    client, discovery = scanner_client
+    details = {
+        "data_tier": "delayed_consolidated", "coverage": "consolidated_us_equities",
+        "feed": "sip", "expected_delay_seconds": 900,
+        "observed_at": FIXED_START.isoformat(),
+        "provider_event_at": "2026-07-06T13:29:00Z",
+        "requested_symbols": 3, "symbols_with_bars": 3,
+    }
+    discovery.result = DiscoveryResult(
+        records_count=4, message="Delayed consolidated bars supplied Market-Movement Discovery.",
+        details=details,
+        hits=tuple(NormalizedDiscoveryHit(**_supplementary_input(
+            source="controlled_delayed_bars", observed_at=FIXED_START,
+            source_reference=f"bar:{index}:2026-07-06T13:29:00Z", **changes,
+        )) for index, changes in enumerate([
+            {"discovery_reason": "Market movement: +10%"},
+            {"discovery_reason": "Activity: 150,000 shares"},
+            {"ticker": "FUND", "security_identifier": "fund", "instrument_type": "fund"},
+            {"ticker": "UNKNOWN", "security_identifier": None, "instrument_type": None},
+        ])),
+    )
+    started = client.post("/scanner-sessions").json()
+    completed = _wait_for_terminal(client, started["id"])
+    assert completed["status"] == "completed"
+    assert [hit["admission_outcome"] for hit in completed["discovery_hits"]] == [
+        "admitted", "admitted", "rejected", "unresolved",
+    ]
+    assert len(completed["candidates"]) == 1
+    assert completed["candidates"][0]["discovery_reasons"] == [
+        "Market movement: +10%", "Activity: 150,000 shares",
+    ]
+    assert completed["diagnostics"][0]["details"] == details
+    assert completed["diagnostics"][0]["records_count"] == 4
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == completed
+
+
+def test_inconsistent_provider_result_cannot_complete(scanner_client):
+    client, discovery = scanner_client
+    discovery.result = DiscoveryResult(records_count=1, message="Invalid count", hits=())
+    started = client.post("/scanner-sessions").json()
+    failed = _wait_for_terminal(client, started["id"])
+    assert failed["status"] == "failed"
+    assert failed["candidates"] == failed["discovery_hits"] == []
+    assert "count does not match" in failed["diagnostics"][0]["message"]
+
+
 def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic(scanner_client):
     client, discovery = scanner_client
 
@@ -185,10 +234,10 @@ def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic
             "capability": "market_movement",
             "required": True,
             "status": "completed",
-            "records_count": 2,
+            "records_count": 0,
             "code": None,
             "message": "Controlled Market-Movement Discovery completed.",
-            "details": {"symbols": ["SINT", "ABVC"]},
+            "details": {"symbols": []},
             "started_at": "2026-07-06T13:45:00Z",
             "completed_at": "2026-07-06T13:45:00Z",
         }
@@ -770,7 +819,7 @@ def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):
     discovery = ControlledDiscovery(release=Event())
     scanner_sessions = ScannerSessions(
         testing_session,
-        discovery_factory=lambda: discovery,
+        discovery_factory=lambda started_at: discovery,
         clock=lambda: FIXED_START,
     )
 
@@ -801,12 +850,12 @@ def test_recovery_does_not_interrupt_another_process_live_session(scanner_databa
     second_discovery = ControlledDiscovery()
     first_process = ScannerSessions(
         testing_session,
-        discovery_factory=lambda: first_discovery,
+        discovery_factory=lambda started_at: first_discovery,
         clock=lambda: FIXED_START,
     )
     second_process = ScannerSessions(
         testing_session,
-        discovery_factory=lambda: second_discovery,
+        discovery_factory=lambda started_at: second_discovery,
         clock=lambda: FIXED_START,
     )
 
@@ -844,12 +893,12 @@ def test_stale_owner_is_failed_and_cannot_overwrite_terminal_attempt(
     current_time = [FIXED_START]
     first_process = ScannerSessions(
         testing_session,
-        discovery_factory=lambda: discovery,
+        discovery_factory=lambda started_at: discovery,
         clock=lambda: current_time[0],
     )
     recovering_process = ScannerSessions(
         testing_session,
-        discovery_factory=ControlledDiscovery,
+        discovery_factory=lambda started_at: ControlledDiscovery(),
         clock=lambda: current_time[0],
     )
     recovery_has_lock = Event()
