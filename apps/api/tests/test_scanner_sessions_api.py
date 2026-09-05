@@ -838,7 +838,7 @@ def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):
     assert failed["diagnostics"][0]["status"] == "failed"
     assert failed["diagnostics"][0]["code"] == "scanner_run_interrupted"
     assert failed["diagnostics"][0]["message"] == (
-        "The application stopped before required Market-Movement Discovery completed. "
+        "The application stopped before this discovery source completed. "
         "Start a new Scanner Session."
     )
 
@@ -1038,6 +1038,7 @@ def test_policy_controls_source_failure_and_atomic_candidate_visibility(scanner_
         assert supplementary.started.wait(2)
         running = client.get(f"/scanner-sessions/{started['id']}").json()
         assert running['status'] == 'running'
+        assert running['stage'] == 'supplementary_discovery'
         assert len(running['candidates']) == 1
         assert client.get('/scanner-sessions/current').json() is None
         release.set()
@@ -1126,3 +1127,80 @@ def test_cancellation_wins_against_late_provider_result(scanner_client):
     assert retry['id'] != cancelled['id']
     _wait_for_terminal(client, retry['id'])
     assert client.get(f"/scanner-sessions/{started['id']}").json() == cancelled
+
+
+def test_later_source_candidates_make_required_failure_partial(scanner_database_url):
+    engine = create_engine(scanner_database_url)
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(failure=RuntimeError('Market unavailable')),
+        supplementary_factories={'news': lambda _: ControlledDiscovery(result=DiscoveryResult(
+            records_count=1, message='News discovery succeeded',
+            hits=(NormalizedDiscoveryHit(**_supplementary_input()),),
+        ))},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert len(terminal['candidates']) == 1
+        assert terminal['status'] == 'partial'
+        assert terminal['diagnostics'][0]['status'] == 'failed'
+        assert terminal['diagnostics'][1]['status'] == 'completed'
+    engine.dispose()
+
+
+def test_optional_source_interruption_reports_the_source_without_claiming_market_failure(scanner_database_url):
+    engine = create_engine(scanner_database_url)
+    optional = ControlledDiscovery(release=Event())
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': lambda _: optional},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        assert optional.started.wait(2)
+        assert client.get(f"/scanner-sessions/{started['id']}").json()['stage'] == 'supplementary_discovery'
+        client.portal.call(scanner.shutdown)
+        terminal = client.get(f"/scanner-sessions/{started['id']}").json()
+        assert terminal['status'] == 'completed'
+        assert terminal['diagnostics'][0]['status'] == 'completed'
+        assert terminal['diagnostics'][1]['code'] == 'scanner_run_interrupted'
+        assert terminal['diagnostics'][1]['message'] == (
+            'The application stopped before this discovery source completed. Start a new Scanner Session.'
+        )
+    engine.dispose()
+
+
+def test_unexpected_run_setup_failure_retains_the_actual_diagnosis(scanner_database_url):
+    from sqlalchemy import event
+    from app.models.scanner_sessions import ScannerSession
+
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+
+    def fail_stage_update(db, flush_context, instances):
+        if any(isinstance(row, ScannerSession) and row.stage == 'market_movement_discovery' for row in db.dirty):
+            raise RuntimeError('Stage persistence defect')
+
+    event.listen(factory, 'before_flush', fail_stage_update)
+    scanner = ScannerSessions(factory, discovery_factory=lambda _: ControlledDiscovery(), clock=lambda: FIXED_START)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == 'failed'
+        assert terminal['diagnostics'][0]['code'] == 'scanner_run_failed'
+        assert 'RuntimeError: Stage persistence defect' in terminal['diagnostics'][0]['message']
+    event.remove(factory, 'before_flush', fail_stage_update)
+    engine.dispose()

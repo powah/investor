@@ -67,7 +67,7 @@ _INTERRUPTED_FAILURE = _ScannerRunFailure(
     diagnostic_status="failed",
     code="scanner_run_interrupted",
     message=(
-        "The application stopped before required Market-Movement Discovery completed. "
+        "The application stopped before this discovery source completed. "
         "Start a new Scanner Session."
     ),
     details={},
@@ -252,8 +252,7 @@ class ScannerSessions:
             return None
         with self._session_factory() as db:
             sessions = (
-                db.query(ScannerSession)
-                .options(*self._load_options())
+                db.query(ScannerSession.id, ScannerSession.started_at, ScannerSession.scanner_policy_settings)
                 .filter(
                     ScannerSession.status == "completed",
                     ScannerSession.trading_date == identity.trading_date,
@@ -264,7 +263,7 @@ class ScannerSessions:
             for session in sessions:
                 max_age = session.scanner_policy_settings.get("currentness_max_age_seconds", 900)
                 if timedelta(0) <= now - session.started_at <= timedelta(seconds=max_age):
-                    return self._read(session)
+                    return self._read(self._by_id(db, session.id))
         return None
 
     async def cancel(self, session_id: int) -> ScannerSessionRead:
@@ -345,7 +344,7 @@ class ScannerSessions:
                     if session is None:
                         return
                     diagnostic = next(d for d in session.diagnostics if d.capability == capability)
-                    session.stage = "market_movement_discovery"
+                    session.stage = "market_movement_discovery" if capability == "market_movement" else "supplementary_discovery"
                     session.heartbeat_at = self._clock()
                     diagnostic.status = "running"
                     diagnostic.started_at = self._clock()
@@ -369,8 +368,11 @@ class ScannerSessions:
             return
         except asyncio.CancelledError:
             self._finish_failed(session_id, _INTERRUPTED_FAILURE)
-        except Exception:
-            self._finish_failed(session_id, _INTERRUPTED_FAILURE)
+        except Exception as exc:
+            self._finish_failed(session_id, _ScannerRunFailure(
+                "failed", "scanner_run_failed",
+                f"Scanner Session failed: {type(exc).__name__}: {str(exc)[:1000]}", {},
+            ))
 
     def _finish_source(
         self, session_id: int, capability: str, *,
@@ -397,6 +399,10 @@ class ScannerSessions:
             diagnostic.completed_at = completed_at
             session.progress_completed += 1
             if session.progress_completed == session.progress_total:
+                # Admission inserts Candidates by foreign key; reload the collection
+                # so this source's new Candidates participate in terminal classification.
+                db.flush()
+                db.expire(session, ["candidates"])
                 required_failed = any(d.required and d.status != "completed" for d in session.diagnostics)
                 session.status = ("partial" if session.candidates else "failed") if required_failed else "completed"
                 session.stage = session.status

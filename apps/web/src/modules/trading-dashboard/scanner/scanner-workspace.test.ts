@@ -57,6 +57,9 @@ function buildWorkspace(candidate: ScannerSymbol, action: string | null = null):
     candidates: [candidate],
     sessions: [],
     sessionHistory: [],
+    hasMoreHistory: false,
+    currentSessionVerified: true,
+    currentSessionError: null,
     currentSession: null,
     inspectedSession: null,
     sessionError: null,
@@ -544,4 +547,56 @@ test("shows no-current state and labels historical inspection separately", () =>
   expect(screen.getByText("No Actionable Current Session")).toBeInTheDocument();
   expect(screen.getByText(/Historical inspection only/)).toBeInTheDocument();
   expect(screen.getByLabelText("Inspect attempt")).toBeInTheDocument();
+});
+
+function reviewRemote(): ScannerRemote {
+  return {
+    listCandidates: vi.fn().mockResolvedValue([]), listLegacyImports: vi.fn().mockResolvedValue([]),
+    getCurrentSession: vi.fn().mockResolvedValue(buildSession({ id: 20, status: "completed", stage: "completed" })),
+    listSessions: vi.fn().mockResolvedValue([]), getSession: vi.fn().mockResolvedValue(buildSession()),
+    cancelSession: vi.fn().mockResolvedValue(buildSession({ status: "cancelled", stage: "cancelled" })),
+    importSampleCandidates: vi.fn(), startSession: vi.fn(), importCandidatesCsv: vi.fn(), updateCandidateStatus: vi.fn(),
+  };
+}
+
+test("a history outage does not discard a successful current-session response", async () => {
+  const remote = reviewRemote();
+  vi.mocked(remote.listSessions).mockRejectedValue(new Error("History unavailable"));
+  const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+  await waitFor(() => expect(result.current.currentSession?.id).toBe(20));
+  expect(result.current.sessionError).toContain("History unavailable");
+});
+
+test("history pagination stops at the last page and cancellation preserves older selections", async () => {
+  const remote = reviewRemote();
+  vi.mocked(remote.cancelSession).mockResolvedValue(buildSession({ id: 100, status: "cancelled", stage: "cancelled" }));
+  const firstPage = Array.from({ length: 50 }, (_, index) => buildSessionSummary({ id: 100 - index, status: index === 0 ? "running" : "completed" }));
+  vi.mocked(remote.listSessions).mockImplementation(async (offset = 0) => offset === 0 ? firstPage : [buildSessionSummary({ id: 1, status: "partial" })]);
+  vi.mocked(remote.getSession).mockImplementation(async (id) => buildSession({ id, status: id === 1 ? "partial" : "running" }));
+  const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+  await act(async () => { await result.current.load(); });
+  await act(async () => { await result.current.loadMoreHistory(); });
+  expect(result.current.sessionHistory).toHaveLength(51);
+  const calls = vi.mocked(remote.listSessions).mock.calls.length;
+  await act(async () => { await result.current.loadMoreHistory(); });
+  expect(remote.listSessions).toHaveBeenCalledTimes(calls);
+  await act(async () => { await result.current.inspectSession(1); await result.current.cancelSession(); });
+  expect(result.current.sessionHistory.some((session) => session.id === 1)).toBe(true);
+  expect(result.current.displayedSession?.id).toBe(1);
+});
+
+test("an unavailable current endpoint preserves its last response and labels it unverified", async () => {
+  const remote = reviewRemote();
+  const { result } = renderHook(() => useScannerWorkspace(remote, { minimumScore: 65, watchedTickers: new Set() }));
+  await waitFor(() => expect(result.current.currentSession?.id).toBe(20));
+  vi.mocked(remote.getCurrentSession).mockRejectedValue(new Error("Current unavailable"));
+  await act(async () => { await result.current.load(); });
+  expect(result.current.currentSession?.id).toBe(20);
+  expect(result.current.currentSessionVerified).toBe(false);
+  expect(result.current.currentSessionError).toContain("Unable to verify");
+  vi.mocked(remote.getCurrentSession).mockResolvedValue(null);
+  await act(async () => { await result.current.load(); });
+  expect(result.current.currentSession).toBeNull();
+  expect(result.current.currentSessionVerified).toBe(true);
+  expect(result.current.currentSessionError).toBeNull();
 });

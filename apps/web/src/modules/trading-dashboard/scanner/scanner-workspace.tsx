@@ -67,6 +67,12 @@ export function useScannerWorkspace(
   const [candidates, setCandidates] = useState<ScannerSymbol[]>([]);
   const [sessions, setSessions] = useState<ScannerSession[]>([]);
   const [sessionHistory, setSessionHistory] = useState<ScannerSessionSummary[]>([]);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const historyPaginated = useRef(false);
+  const loadingHistory = useRef(false);
+  const [currentSessionVerified, setCurrentSessionVerified] = useState(false);
+  const [currentSessionError, setCurrentSessionError] = useState<string | null>(null);
+  const currentRequest = useRef(0);
   const [currentSession, setCurrentSession] = useState<ScannerSession | null>(null);
   const [inspectedSession, setInspectedSession] = useState<ScannerSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -91,22 +97,45 @@ export function useScannerWorkspace(
     });
   }, []);
 
+  const mergeHistoryPage = useCallback((history: ScannerSessionSummary[]) => {
+    if (!historyPaginated.current) {
+      setHasMoreHistory(history.length === 50);
+    }
+    setSessionHistory((previous) => [...history, ...previous.filter((item) => !history.some((entry) => entry.id === item.id))]);
+  }, []);
+
+  const refreshCurrentSession = useCallback(async (isCancelled: () => boolean = () => false) => {
+    const request = ++currentRequest.current;
+    try {
+      const actionable = await remote.getCurrentSession();
+      if (!isCancelled() && request === currentRequest.current) {
+        setCurrentSession(actionable);
+        setCurrentSessionVerified(true);
+        setCurrentSessionError(null);
+      }
+    } catch {
+      if (!isCancelled() && request === currentRequest.current) {
+        setCurrentSessionVerified(false);
+        setCurrentSessionError("Unable to verify the Actionable Current Session. Showing the last known result; refresh to retry.");
+      }
+    }
+  }, [remote]);
+
   const load = useCallback(async () => {
-    const [candidateData, sessionSummaries, actionable] = await Promise.all([
+    const [candidateData, sessionSummaries] = await Promise.all([
       remote.listCandidates(),
       remote.listSessions(),
-      remote.getCurrentSession(),
+      refreshCurrentSession(),
     ]);
     const displayedSummary =
       sessionSummaries.find((session) => session.status === "running") ?? sessionSummaries[0] ?? null;
     const sessionData = displayedSummary ? [await remote.getSession(displayedSummary.id)] : [];
-    setCurrentSession(actionable);
-    setSessionHistory(sessionSummaries);
+    mergeHistoryPage(sessionSummaries);
     setCandidates(candidateData);
     setSessions(sessionData);
     setSelectedTicker((current) => current || candidateData[0]?.ticker || "");
     return candidateData;
-  }, [remote]);
+  }, [mergeHistoryPage, refreshCurrentSession, remote]);
 
   const displayedSession = inspectedSession ?? sessions.find((session) => session.status === "running") ?? sessions[0] ?? null;
   const activeSessionId = sessions.find((session) => session.status === "running")?.id ?? null;
@@ -122,26 +151,24 @@ export function useScannerWorkspace(
       }
       refreshPending = true;
       try {
-        const [updated, actionable, history] = await Promise.all([
+        const [updated, history] = await Promise.allSettled([
           scannerSessionId === null ? Promise.resolve(null) : remote.getSession(scannerSessionId),
-          remote.getCurrentSession(),
           remote.listSessions(),
+          refreshCurrentSession(() => cancelled),
         ]);
         if (!cancelled) {
-          setCurrentSession(actionable);
-          setSessionError(null);
-          setSessionHistory((previous) => [...history, ...previous.filter((item) => !history.some((entry) => entry.id === item.id))]);
-          if (updated) {
-            setSessions((current) => [updated, ...current.filter((session) => session.id !== updated.id)]);
-            setInspectedSession((current) => current?.id === updated.id ? updated : current);
-          }
+          const errors: string[] = [];
+          if (history.status === "fulfilled") mergeHistoryPage(history.value);
+          else errors.push(String(history.reason));
+          if (updated.status === "fulfilled") {
+            const session = updated.value;
+            if (session) {
+              setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+              setInspectedSession((current) => current?.id === session.id ? session : current);
+            }
+          } else errors.push(String(updated.reason));
+          setSessionError(errors.length ? errors.join("; ") : null);
         }
-      } catch {
-        if (!cancelled) {
-          setCurrentSession(null);
-          setSessionError("Unable to verify the Actionable Current Session. Refresh to retry.");
-        }
-        // Persisted attempt progress remains inspectable during connectivity failures.
       } finally {
         refreshPending = false;
       }
@@ -153,7 +180,7 @@ export function useScannerWorkspace(
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeSessionId, remote]);
+  }, [activeSessionId, mergeHistoryPage, refreshCurrentSession, remote]);
 
   const inspectSession = useCallback(async (sessionId: number | null) => {
     const request = ++inspectionRequest.current;
@@ -171,13 +198,21 @@ export function useScannerWorkspace(
   }, [remote]);
 
   const loadMoreHistory = useCallback(async () => {
+    if (!hasMoreHistory || loadingHistory.current) return;
+    loadingHistory.current = true;
+    beginAction("history-page");
     try {
       const older = await remote.listSessions(sessionHistory.length);
+      historyPaginated.current = true;
+      setHasMoreHistory(older.length === 50);
       setSessionHistory((current) => [...current, ...older.filter((item) => !current.some((entry) => entry.id === item.id))]);
     } catch (error) {
       setSessionError(String(error));
+    } finally {
+      loadingHistory.current = false;
+      endAction("history-page");
     }
-  }, [remote, sessionHistory.length]);
+  }, [beginAction, endAction, hasMoreHistory, remote, sessionHistory.length]);
 
   const cancelSession = useCallback(async () => {
     if (activeSessionId === null) return;
@@ -187,14 +222,16 @@ export function useScannerWorkspace(
       const cancelled = await remote.cancelSession(activeSessionId);
       setSessions((current) => [cancelled, ...current.filter((item) => item.id !== cancelled.id)]);
       setInspectedSession((current) => current?.id === cancelled.id ? cancelled : current);
-      setCurrentSession(await remote.getCurrentSession());
-      setSessionHistory(await remote.listSessions());
+      await Promise.all([
+        refreshCurrentSession(),
+        remote.listSessions().then(mergeHistoryPage),
+      ]);
     } catch (error) {
       setSessionError(String(error));
     } finally {
       endAction("cancel-session");
     }
-  }, [activeSessionId, beginAction, endAction, remote]);
+  }, [activeSessionId, beginAction, endAction, mergeHistoryPage, refreshCurrentSession, remote]);
 
   const selectedCandidate = useMemo(
     () => candidates.find((candidate) => candidate.ticker === selectedTicker) ?? null,
@@ -320,6 +357,9 @@ export function useScannerWorkspace(
     candidates,
     sessions,
     sessionHistory,
+    hasMoreHistory,
+    currentSessionVerified,
+    currentSessionError,
     currentSession,
     inspectedSession,
     sessionError,
@@ -407,12 +447,17 @@ export function ScannerWorkspace({
         ) : (
           <>
             <section className="panel rounded-xl p-4" aria-label="Actionable Current Session">
-              <h3 className="font-semibold">{workspace.currentSession
+              <h3 className="font-semibold">{!workspace.currentSessionVerified
+                ? `Actionable Current Session unverified${workspace.currentSession ? ` · Last known #${workspace.currentSession.id}` : ""}`
+                : workspace.currentSession
                 ? `Actionable Current Session #${workspace.currentSession.id}`
                 : "No Actionable Current Session"}</h3>
               <p className="text-sm text-slate-600">{workspace.currentSession
                 ? `${workspace.currentSession.trading_date} · ${workspace.currentSession.market_phase.replaceAll("_", " ")} · ${workspace.currentSession.candidates.length} Candidates · Last refresh ${new Date(workspace.currentSession.completed_at!).toLocaleString()}`
-                : "No completed Scanner Session satisfies currentness rules. Historical attempts remain available for inspection."}</p>
+                : workspace.currentSessionVerified
+                  ? "No completed Scanner Session satisfies currentness rules. Historical attempts remain available for inspection."
+                  : "Currentness has not been verified. Historical attempts remain available for inspection."}</p>
+              {workspace.currentSessionError && <p role="alert">{workspace.currentSessionError}</p>}
               {workspace.currentSession && <ul className="mt-2 flex flex-wrap gap-3" aria-label="Actionable Current Session Candidates">
                 {workspace.currentSession.candidates.map((candidate) => <li key={candidate.id}>
                   {candidate.observed_listings[0]?.ticker ?? candidate.security.issuer_name ?? candidate.security.identifier}
@@ -428,7 +473,7 @@ export function ScannerWorkspace({
                   </option>)}
                 </select>
               </label>
-              {workspace.sessionHistory.length >= 50 && <button type="button" className="text-button" onClick={() => void workspace.loadMoreHistory()}>Load older attempts</button>}
+              {workspace.hasMoreHistory && <button type="button" disabled={workspace.pendingActions.has("history-page")} className="text-button" onClick={() => void workspace.loadMoreHistory()}>Load older attempts</button>}
               {workspace.inspectedSession && <p className="mt-2 text-sm text-amber-800">Historical inspection only. Selecting an attempt does not change the Actionable Current Session.</p>}
               {workspace.activeSessionId !== null && <button type="button" className="text-button"
                 disabled={workspace.pendingActions.has("cancel-session")} onClick={() => void workspace.cancelSession()}>Cancel active run</button>}
