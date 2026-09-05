@@ -1,6 +1,24 @@
 {
   "version": 1,
   "skills": {
+    "alpaca-trading-backtest": {
+      "source": "alpacahq/alpaca-skills",
+      "sourceType": "github",
+      "skillPath": "skills/trading-api/backtest/SKILL.md",
+      "computedHash": "a0fca148b3a08dab9e3d4c491737a5d98c6f0b133e743482e79ba5cf881c5fbe"
+    },
+    "alpaca-trading-paper-trading": {
+      "source": "alpacahq/alpaca-skills",
+      "sourceType": "github",
+      "skillPath": "skills/trading-api/paper-trading/SKILL.md",
+      "computedHash": "44b961d34595e74d4c6a7d05b2ede1cb40ee0be8ceaaf134aa9f546eae90f182"
+    },
+    "alpaca-trading-paper-trading-cli": {
+      "source": "alpacahq/alpaca-skills",
+      "sourceType": "github",
+      "skillPath": "skills/trading-api/paper-trading-cli/SKILL.md",
+      "computedHash": "1c83b6344d10ee5527b687709acf952dfab9e7d4a3f507489f12b9927ba4c9ba"
+    },
     "ask-matt": {
       "source": "mattpocock/skills",
       "sourceType": "github",
