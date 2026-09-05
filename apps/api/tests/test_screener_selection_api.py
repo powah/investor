@@ -115,6 +115,9 @@ def test_prior_day_screeners_are_retained_but_require_current_fallback(run_selec
     details = result["diagnostics"][0]["details"]
     assert details["selected_sources"] == ["bars"]
     assert details["sources"]["screener:movers"]["status"] == "inapplicable"
+    assert not {"data_tier", "feed", "coverage", "expected_delay_seconds"} & details.keys()
+    assert details["sources"]["bars"]["data_tier"] == "delayed_consolidated"
+    assert result["discovery_hits"][0]["provenance"]["data_tier"] == "screener_consolidated"
 
 
 def test_same_day_premarket_update_is_not_proof_of_current_daily_rankings(run_selection):
@@ -128,11 +131,15 @@ def test_same_day_premarket_update_is_not_proof_of_current_daily_rankings(run_se
     details = result["diagnostics"][0]["details"]
     assert details["selected_sources"] == ["bars"]
     assert details["sources"]["screener:movers"]["reason"] == "premarket_daily_rankings"
+    assert "data_tier" not in details
     assert result["discovery_hits"][0]["provenance"]["applicable_to_session"] is False
 
 
-def test_closed_phase_does_not_request_screeners(run_selection):
-    client, started, adapters, bars = run_selection(instant=datetime(2026, 7, 5, 14, tzinfo=timezone.utc))
+@pytest.mark.parametrize("statuses", [("available", "available"), (None, None), ("unavailable", "failed")])
+def test_closed_phase_does_not_request_screeners(run_selection, statuses):
+    client, started, adapters, bars = run_selection(
+        instant=datetime(2026, 7, 5, 14, tzinfo=timezone.utc), statuses=statuses,
+    )
     result = _wait_for_terminal(client, started["id"])
     assert result["market_phase"] == "closed"
     assert [adapter.calls for adapter in adapters] == [0, 0]
@@ -174,6 +181,8 @@ def test_failed_fallback_cannot_turn_prior_day_hits_into_completed_discovery(run
     assert result["status"] == "partial"
     assert len(result["discovery_hits"]) == len(result["candidates"]) == 1
     assert result["diagnostics"][0]["code"] == "required_discovery_unavailable"
+    assert result["diagnostics"][0]["records_count"] == len(result["discovery_hits"])
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == result
 
 
 @pytest.mark.parametrize("recorded", ["available", "unavailable", "missing", "other_account", "legacy", "newer_denial"])

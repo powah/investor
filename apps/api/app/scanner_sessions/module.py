@@ -384,6 +384,7 @@ class ScannerSessions:
             if session is None:
                 return
             admit_discovery_hits(db, session=session, inputs=failure.hits, observed_at=completed_at)
+            session.diagnostics[0].records_count = len(failure.hits)
             # Reload Candidates added by failed discovery before determining partial status.
             db.expire(session, ["candidates"])
             self._mark_failed(

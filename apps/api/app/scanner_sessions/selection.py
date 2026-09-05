@@ -50,11 +50,11 @@ class CapabilityAwareDiscovery:
                 "status": "pending", "source": adapter.source,
                 "capability": vars(capability) if capability else None,
             }
-            if capability is None or capability.status != "available":
-                decision.update(status="skipped", reason="capability_not_verified")
-                needs_fallback = True
-            elif self._identity.market_phase == "closed":
+            if self._identity.market_phase == "closed":
                 decision.update(status="skipped", reason="market_phase_closed")
+                needs_fallback = True
+            elif capability is None or capability.status != "available":
+                decision.update(status="skipped", reason="capability_not_verified")
                 needs_fallback = True
             else:
                 decision.update(status="running", reason="recorded_access_available")
@@ -127,9 +127,15 @@ class CapabilityAwareDiscovery:
             **fallback_details, "sources": sources, "selected_sources": completed,
             "selection_policy": "capability-aware-v1", "fallback_used": needs_fallback or not self._screeners,
         }
-        # With several contracts there is no single session-wide Data Tier.
-        if len(completed) > 1:
-            for key in ("data_tier", "feed", "coverage", "expected_delay_seconds"):
+        # Retained inapplicable hits also belong to the session's audit record,
+        # even when only the fallback satisfies required discovery.
+        contract_fields = ("data_tier", "feed", "coverage", "expected_delay_seconds")
+        mixed_contracts = any(
+            any(hit.provenance.get(key) != details.get(key) for key in contract_fields)
+            for hit in hits
+        )
+        if len(completed) > 1 or mixed_contracts:
+            for key in contract_fields:
                 details.pop(key, None)
         return DiscoveryResult(
             records_count=len(hits), hits=tuple(hits), details=details,
