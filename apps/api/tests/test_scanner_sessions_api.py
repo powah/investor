@@ -49,7 +49,7 @@ class ControlledDiscovery:
         self.started = Event()
         self._lock = Lock()
 
-    async def discover(self) -> DiscoveryResult:
+    async def discover(self, *, report_progress=None) -> DiscoveryResult:
         with self._lock:
             self.calls += 1
         self.started.set()
@@ -1248,4 +1248,63 @@ def test_adapter_setup_failure_is_an_inspectable_attempt(scanner_database_url, c
         assert retry.status_code == 202
         assert retry.json()['id'] != terminal['id']
         _wait_for_terminal(client, retry.json()['id'])
+    engine.dispose()
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_supplementary_progress_and_failure_preserve_source_diagnostics(scanner_database_url, interrupted):
+    engine = create_engine(scanner_database_url)
+    release = Event()
+    reported = Event()
+
+    class ReportingDiscovery:
+        source = 'reporting_news'
+
+        async def discover(self, *, report_progress=None):
+            report_progress('News discovery in progress', {'news_pages': 2})
+            reported.set()
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+            raise DiscoveryUnavailable(
+                code='news_unavailable', message='News stopped after two pages',
+                details={'http_status': 503},
+                hits=(NormalizedDiscoveryHit(**_supplementary_input(source='news')),),
+            )
+
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(result=DiscoveryResult(
+            records_count=1, message='Market discovery complete',
+            details={'market_pages': 1},
+            hits=(NormalizedDiscoveryHit(**_supplementary_input(security_identifier='market-progress-security')),),
+        )),
+        supplementary_factories={'news': lambda _: ReportingDiscovery()},
+        policy_settings={'required_sources': ['market_movement', 'news']},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        assert reported.wait(2)
+        running = client.get(f"/scanner-sessions/{started['id']}").json()
+        market = running['diagnostics'][0]
+        assert market['details'] == {'market_pages': 1}
+        assert market['records_count'] == 1
+        assert running['diagnostics'][1]['message'] == 'News discovery in progress'
+        assert running['diagnostics'][1]['details'] == {'news_pages': 2}
+        if interrupted:
+            client.portal.call(scanner.shutdown)
+        else:
+            release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == 'partial'
+        assert terminal['diagnostics'][0] == market
+        news = terminal['diagnostics'][1]
+        assert news['details'] == ({'news_pages': 2} if interrupted else {'news_pages': 2, 'http_status': 503})
+        assert len(terminal['candidates']) == (1 if interrupted else 2)
+        assert news['records_count'] == (0 if interrupted else 1)
+        assert terminal['scanner_policy_settings']['currentness_max_age_seconds'] == 900
+        assert terminal['progress']['percent'] == 100
     engine.dispose()

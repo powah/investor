@@ -276,6 +276,7 @@ def admit_discovery_hits(
                     item.depositary_to_underlying_ratio
                 ),
                 discovery_reason=item.discovery_reason.strip(),
+                provenance=item.provenance,
                 admission_outcome=outcome,
                 admission_reasons=reasons,
             )

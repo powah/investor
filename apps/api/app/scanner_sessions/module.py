@@ -34,6 +34,7 @@ from app.schemas.scanner_sessions import (
     DiscoveryHitRead,
     ListingObservationRead,
     ListingRead,
+    NormalizedDiscoveryHit,
     ScannerSessionDiagnosticRead,
     ScannerSessionProgressRead,
     ScannerSessionRead,
@@ -61,6 +62,7 @@ class _ScannerRunFailure:
     code: str
     message: str
     details: Mapping[str, Any]
+    hits: tuple[NormalizedDiscoveryHit, ...] = ()
 
 
 _INTERRUPTED_FAILURE = _ScannerRunFailure(
@@ -362,12 +364,12 @@ class ScannerSessions:
                         diagnostic.source = discovery.source
                         db.commit()
                     operation = "discovery"
-                    result = await self._discover_with_heartbeat(session_id, discovery)
+                    result = await self._discover_with_heartbeat(session_id, capability, discovery)
                     result.validate()
                     self._finish_source(session_id, capability, result=result)
                 except DiscoveryUnavailable as exc:
                     self._finish_source(session_id, capability, failure=_ScannerRunFailure(
-                        "unavailable", exc.code, exc.message, exc.details,
+                        "unavailable", exc.code, exc.message, exc.details, exc.hits,
                     ))
                 except (_ScannerRunOwnershipLost, asyncio.CancelledError):
                     raise
@@ -404,10 +406,12 @@ class ScannerSessions:
                 diagnostic.details = result.details
             else:
                 assert failure is not None
+                admit_discovery_hits(db, session=session, inputs=failure.hits, observed_at=completed_at)
+                diagnostic.records_count = len(failure.hits)
                 diagnostic.status = failure.diagnostic_status
                 diagnostic.code = failure.code
                 diagnostic.message = failure.message
-                diagnostic.details = dict(failure.details)
+                diagnostic.details = {**diagnostic.details, **dict(failure.details)}
             diagnostic.completed_at = completed_at
             session.progress_completed += 1
             if session.progress_completed == session.progress_total:
@@ -427,9 +431,21 @@ class ScannerSessions:
     async def _discover_with_heartbeat(
         self,
         session_id: int,
+        capability: str,
         discovery: MarketMovementDiscovery,
     ) -> DiscoveryResult:
-        discovery_task = asyncio.create_task(discovery.discover())
+        def report_progress(message: str, details: dict[str, Any]) -> None:
+            with self._session_factory() as db:
+                session = self._owned_active(db, session_id, for_update=True)
+                if session is None:
+                    raise _ScannerRunOwnershipLost
+                diagnostic = next(item for item in session.diagnostics if item.capability == capability)
+                diagnostic.message = message
+                diagnostic.details = details
+                session.heartbeat_at = self._clock()
+                db.commit()
+
+        discovery_task = asyncio.create_task(discovery.discover(report_progress=report_progress))
         try:
             while True:
                 done, _ = await asyncio.wait(
@@ -492,7 +508,7 @@ class ScannerSessions:
             diagnostic.status = failure.diagnostic_status
             diagnostic.code = failure.code
             diagnostic.message = failure.message
-            diagnostic.details = dict(failure.details)
+            diagnostic.details = {**diagnostic.details, **dict(failure.details)}
             diagnostic.completed_at = completed_at
         required_failed = any(d.required and d.status != "completed" for d in session.diagnostics)
         session.status = ("partial" if session.candidates else "failed") if required_failed else "completed"
@@ -651,6 +667,7 @@ class ScannerSessions:
                     observed_at=hit.observed_at,
                     ticker=hit.ticker,
                     discovery_reason=hit.discovery_reason,
+                    provenance=hit.provenance,
                     observed_listing=cls._listing_observation_read(hit),
                     admission_outcome=hit.admission_outcome,
                     admission_reasons=hit.admission_reasons,

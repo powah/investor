@@ -9,7 +9,9 @@ from app.core.config import Settings
 from app.core.database import Base
 from app.models.integrations import ProviderCapabilityCheck
 from app.providers.alpaca_capabilities import AlpacaCapabilityProbe
-from app.services.capabilities import latest_capability_checks, probe_alpaca_capabilities
+from app.services.capabilities import (
+    capability_configuration_fingerprint, latest_capability_checks, probe_alpaca_capabilities,
+)
 
 
 def _run(coro):
@@ -94,6 +96,8 @@ def test_probe_results_are_persisted_and_latest_results_are_queryable():
     with testing_session() as db:
         checks = _run(scenario(db))
         assert len(checks) == 6
+        assert all(check.details["configuration_fingerprint"] == capability_configuration_fingerprint(settings) for check in checks)
+        assert "paper-secret" not in str([check.details for check in checks])
         assert db.query(ProviderCapabilityCheck).count() == 6
         latest = latest_capability_checks(db)
         assert {check.capability for check in latest} == {
