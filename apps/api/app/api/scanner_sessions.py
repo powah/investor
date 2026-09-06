@@ -79,6 +79,24 @@ def list_scanner_sessions(
     return scanner_sessions.list(limit=limit, offset=offset)
 
 
+@router.get("/current", response_model=ScannerSessionRead | None)
+def get_current_scanner_session(
+    scanner_sessions: ScannerSessions = Depends(get_scanner_sessions),
+) -> ScannerSessionRead | None:
+    return scanner_sessions.current()
+
+
+@router.post("/{session_id}/cancel", response_model=ScannerSessionRead)
+async def cancel_scanner_session(
+    session_id: int,
+    scanner_sessions: ScannerSessions = Depends(get_scanner_sessions),
+) -> ScannerSessionRead:
+    try:
+        return await scanner_sessions.cancel(session_id)
+    except ScannerSessionNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.get("/{session_id}", response_model=ScannerSessionRead)
 def get_scanner_session(
     session_id: int,

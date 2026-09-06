@@ -151,7 +151,7 @@ See [Risk Rules](docs/risk-rules.md) for the complete operational boundaries.
 
 ## Current limitations
 
-- Scanner Sessions capture run identity, Market-Movement Discovery lifecycle diagnostics, and immutable manual/CSV Discovery Hits with Candidate Admission against stable Security and effective-dated Listing identities. Provider-driven Discovery Hits, Candidate Evidence, scoring, eligibility, and Actionable Current Session promotion remain later milestone slices; pre-session rows stay isolated as non-actionable Legacy Imports.
+- Scanner Sessions capture run identity, Market-Movement Discovery lifecycle diagnostics, and immutable manual/CSV Discovery Hits with Candidate Admission against stable Security and effective-dated Listing identities. Candidate Evidence, scoring, and eligibility remain later milestone slices; pre-session rows stay isolated as non-actionable Legacy Imports.
 - Market, news, and filing imports are manually triggered REST syncs. The background worker streams paper order events, but it is not a market/news streaming consumer.
 - Alpaca News availability and freshness can vary with the free account entitlement.
 - Paid real-time SIP is represented as unverified and disabled; configuration alone is never reported as entitlement.
@@ -180,3 +180,35 @@ cd apps/api
 ```
 
 Python 3.14 is the supported backend development runtime; the API image is pinned to CPython 3.14.7. Recreate older virtual environments before installing the current dependency set.
+
+### Scanner Session completion and history
+
+`GET /scanner-sessions/current` returns the Actionable Current Session, or JSON
+`null` when none qualifies. Selection is derived from completed attempts, ordered
+by start time and ID. Completion and the final Candidate changes share a database
+transaction; running, partial, failed, and cancelled attempts never enter this view.
+The initial captured currentness policy permits an age of at most 900 seconds
+from run start and requires the current exchange Trading Date and Market Phase.
+Closed phases have no Actionable Current Session. This bounds session currentness;
+it does not substitute for evidence-specific Freshness checks.
+
+`POST /scanner-sessions/{id}/cancel` durably cancels a running attempt and is
+idempotent for terminal attempts. Local provider work is cancelled immediately;
+work owned by another process stops on its next lease heartbeat (at most ten
+seconds). Ownership checks prevent late results from changing cancelled history.
+The scanner's attempt selector affects inspection only; the dashboard displays
+Actionable Current Session independently. Older attempts remain paginated through
+`GET /scanner-sessions?limit=50&offset=50`.
+
+Source diagnostics capture requiredness from the run's Scanner Policy. A required
+source failure produces partial status when admitted Candidates remain, otherwise
+failed status. Optional source failures are retained as diagnostics and permit
+completion. Unknown Evidence and low Evidence Coverage do not change lifecycle
+status. Additional discovery adapters can be supplied through the Scanner Sessions
+module's `supplementary_factories` interface; production currently runs required
+Market-Movement Discovery with manual and CSV supplementary inputs.
+
+Adapter construction runs in a worker thread under the same lease heartbeat as
+discovery. Cancelling a run stops awaiting setup; synchronous initialization I/O
+already executing in that thread may finish later, but its result is discarded
+and cannot start discovery or change the terminal attempt.

@@ -219,6 +219,7 @@ def test_start_records_fixed_identity_versions_progress_and_completed_diagnostic
         "market_cap_ceiling_usd": 2_000_000_000,
         "minimum_price_usd": 1,
         "required_sources": ["market_movement"],
+        "currentness_max_age_seconds": 900,
     }
     assert started["scoring_model_version"] == "scoring-model-v1"
     assert started["progress"] == {"completed": 0, "total": 1, "percent": 0}
@@ -837,7 +838,7 @@ def test_shutdown_marks_in_flight_attempt_failed(scanner_database_url: str):
     assert failed["diagnostics"][0]["status"] == "failed"
     assert failed["diagnostics"][0]["code"] == "scanner_run_interrupted"
     assert failed["diagnostics"][0]["message"] == (
-        "The application stopped before required Market-Movement Discovery completed. "
+        "The application stopped before this discovery source completed. "
         "Start a new Scanner Session."
     )
 
@@ -965,3 +966,412 @@ def test_exchange_session_identity_uses_new_york_calendar(
 
     assert identity.trading_date.isoformat() == trading_date
     assert identity.market_phase == market_phase
+
+
+def test_current_promotion_and_degraded_history_are_independent(scanner_client):
+    client, discovery = scanner_client
+    good = client.post('/scanner-sessions', json={
+        'supplementary_inputs': [_supplementary_input()],
+    }).json()
+    completed = _wait_for_terminal(client, good['id'])
+    assert client.get('/scanner-sessions/current').json() == completed
+
+    for status in ('partial', 'failed', 'cancelled'):
+        discovery.release = Event()
+        discovery.failure = RuntimeError('Required source failed')
+        started = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [] if status == 'failed' else [_supplementary_input()],
+        }).json()
+        assert started['status'] == 'running'
+        assert client.get('/scanner-sessions/current').json() == completed
+        if status == 'cancelled':
+            cancelled = client.post(f"/scanner-sessions/{started['id']}/cancel")
+            assert cancelled.status_code == 200
+        discovery.release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == status
+        assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+        assert client.get('/scanner-sessions/current').json() == completed
+        # Cancellation is idempotent and cannot rewrite any terminal outcome.
+        assert client.post(f"/scanner-sessions/{started['id']}/cancel").json() == terminal
+        assert any(item['id'] == started['id'] for item in client.get('/scanner-sessions').json())
+
+    discovery.failure = None
+    newer = client.post('/scanner-sessions', json={
+        'supplementary_inputs': [_supplementary_input(), _supplementary_input(
+            security_identifier='second-promoted-security', ticker='NEXT',
+        )],
+    }).json()
+    replacement = _wait_for_terminal(client, newer['id'])
+    assert len(replacement['candidates']) == 2
+    assert client.get('/scanner-sessions/current').json() == replacement
+    assert client.get(f"/scanner-sessions/{good['id']}").json() == completed
+    assert client.get('/scanner-sessions/current').json() == replacement
+    assert client.post('/scanner-sessions/999999999/cancel').status_code == 404
+
+
+@pytest.mark.parametrize('required', [False, True])
+def test_policy_controls_source_failure_and_atomic_candidate_visibility(scanner_database_url, required):
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+    release = Event()
+    supplementary = ControlledDiscovery(release=release, failure=RuntimeError('News unavailable'))
+    now = [FIXED_START + timedelta(days=1 if required else 2)]
+    scanner = ScannerSessions(
+        factory,
+        discovery_factory=lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': lambda _: supplementary},
+        policy_settings={
+            'required_sources': ['market_movement', 'news'] if required else ['market_movement'],
+            'currentness_max_age_seconds': 900,
+        },
+        clock=lambda: now[0],
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        assert client.get('/scanner-sessions/current').json() is None
+        started = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [_supplementary_input()],
+        }).json()
+        assert supplementary.started.wait(2)
+        running = client.get(f"/scanner-sessions/{started['id']}").json()
+        assert running['status'] == 'running'
+        assert running['stage'] == 'supplementary_discovery'
+        assert len(running['candidates']) == 1
+        assert client.get('/scanner-sessions/current').json() is None
+        release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == ('partial' if required else 'completed')
+        assert terminal['diagnostics'][1]['required'] is required
+        assert terminal['diagnostics'][1]['status'] == 'failed'
+        current = client.get('/scanner-sessions/current').json()
+        assert current == (None if required else terminal)
+        # A Candidate with no enrichment/evaluation still permits completion.
+        assert len(terminal['candidates']) == 1
+        now[0] += timedelta(minutes=15, seconds=1)
+        assert client.get('/scanner-sessions/current').json() is None
+        assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+    engine.dispose()
+
+
+@pytest.mark.parametrize('later', [
+    FIXED_START + timedelta(days=1),
+    FIXED_START.replace(hour=20),
+    FIXED_START.replace(hour=1),
+])
+def test_currentness_requires_current_exchange_date_phase_and_nonfuture_start(scanner_client, scanner_database_url, later):
+    client, _ = scanner_client
+    started = client.post('/scanner-sessions').json()
+    terminal = _wait_for_terminal(client, started['id'])
+    engine = create_engine(scanner_database_url)
+    scanner = ScannerSessions(sessionmaker(bind=engine), discovery_factory=lambda _: ControlledDiscovery(), clock=lambda: later)
+    client.app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    assert client.get('/scanner-sessions/current').json() is None
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == terminal
+    engine.dispose()
+
+
+def test_concurrent_current_readers_see_only_whole_candidate_sets(scanner_client):
+    client, discovery = scanner_client
+    first = client.post('/scanner-sessions').json()
+    good = _wait_for_terminal(client, first['id'])
+    discovery.release = Event()
+    discovery.result = DiscoveryResult(
+        records_count=12,
+        message='Complete discovery batch',
+        hits=tuple(NormalizedDiscoveryHit(**_supplementary_input(
+            security_identifier=f'atomic-security-{index}', ticker=f'AT{index}',
+        )) for index in range(12)),
+    )
+    started = client.post('/scanner-sessions').json()
+    assert client.get('/scanner-sessions/current').json() == good
+
+    def observe_completion():
+        observed = []
+        deadline = monotonic() + 3
+        while monotonic() < deadline:
+            current = client.get('/scanner-sessions/current').json()
+            observed.append(current)
+            if current['id'] == started['id']:
+                return observed
+        pytest.fail('Completed session was never promoted')
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        readers = [executor.submit(observe_completion) for _ in range(2)]
+        discovery.release.set()
+        observations = [future.result() for future in readers]
+    for snapshots in observations:
+        for snapshot in snapshots:
+            assert snapshot['status'] == 'completed'
+            if snapshot['id'] == good['id']:
+                assert snapshot == good
+            else:
+                assert snapshot['id'] == started['id']
+                assert len(snapshot['candidates']) == 12
+                assert len(snapshot['discovery_hits']) == 12
+                assert snapshot['diagnostics'][0]['records_count'] == 12
+
+
+def test_cancellation_wins_against_late_provider_result(scanner_client):
+    client, discovery = scanner_client
+    discovery.release = Event()
+    started = client.post('/scanner-sessions').json()
+    assert discovery.started.wait(2)
+    cancelled = client.post(f"/scanner-sessions/{started['id']}/cancel").json()
+    assert cancelled['status'] == 'cancelled'
+    assert cancelled['diagnostics'][0]['code'] == 'operator_cancelled'
+    discovery.release.set()
+    retry = client.post('/scanner-sessions').json()
+    assert retry['id'] != cancelled['id']
+    _wait_for_terminal(client, retry['id'])
+    assert client.get(f"/scanner-sessions/{started['id']}").json() == cancelled
+
+
+def test_later_source_candidates_make_required_failure_partial(scanner_database_url):
+    engine = create_engine(scanner_database_url)
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(failure=RuntimeError('Market unavailable')),
+        supplementary_factories={'news': lambda _: ControlledDiscovery(result=DiscoveryResult(
+            records_count=1, message='News discovery succeeded',
+            hits=(NormalizedDiscoveryHit(**_supplementary_input()),),
+        ))},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert len(terminal['candidates']) == 1
+        assert terminal['status'] == 'partial'
+        assert terminal['diagnostics'][0]['status'] == 'failed'
+        assert terminal['diagnostics'][1]['status'] == 'completed'
+    engine.dispose()
+
+
+def test_optional_source_interruption_reports_the_source_without_claiming_market_failure(scanner_database_url):
+    engine = create_engine(scanner_database_url)
+    optional = ControlledDiscovery(release=Event())
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': lambda _: optional},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        assert optional.started.wait(2)
+        assert client.get(f"/scanner-sessions/{started['id']}").json()['stage'] == 'supplementary_discovery'
+        client.portal.call(scanner.shutdown)
+        terminal = client.get(f"/scanner-sessions/{started['id']}").json()
+        assert terminal['status'] == 'completed'
+        assert terminal['diagnostics'][0]['status'] == 'completed'
+        assert terminal['progress'] == {'completed': 2, 'total': 2, 'percent': 100}
+        assert terminal['diagnostics'][1]['code'] == 'scanner_run_interrupted'
+        assert terminal['diagnostics'][1]['message'] == (
+            'The application stopped before this discovery source completed. Start a new Scanner Session.'
+        )
+    engine.dispose()
+
+
+def test_unexpected_run_setup_failure_retains_the_actual_diagnosis(scanner_database_url):
+    from sqlalchemy import event
+    from app.models.scanner_sessions import ScannerSession
+
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+
+    def fail_stage_update(db, flush_context, instances):
+        if any(isinstance(row, ScannerSession) and row.stage == 'market_movement_discovery' for row in db.dirty):
+            raise RuntimeError('Stage persistence defect')
+
+    event.listen(factory, 'before_flush', fail_stage_update)
+    scanner = ScannerSessions(factory, discovery_factory=lambda _: ControlledDiscovery(), clock=lambda: FIXED_START)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == 'failed'
+        assert terminal['progress'] == {'completed': 1, 'total': 1, 'percent': 100}
+        assert terminal['diagnostics'][0]['code'] == 'scanner_run_failed'
+        assert 'RuntimeError: Stage persistence defect' in terminal['diagnostics'][0]['message']
+    event.remove(factory, 'before_flush', fail_stage_update)
+    engine.dispose()
+
+
+@pytest.mark.parametrize('capability,required,admitted,expected', [
+    ('market_movement', True, False, 'failed'),
+    ('market_movement', True, True, 'partial'),
+    ('news', True, False, 'failed'),
+    ('news', True, True, 'partial'),
+    ('news', False, False, 'completed'),
+])
+def test_adapter_setup_failure_is_an_inspectable_attempt(scanner_database_url, capability, required, admitted, expected):
+    engine = create_engine(scanner_database_url)
+    factory = sessionmaker(bind=engine, autoflush=False)
+
+    def broken_factory(started_at):
+        raise RuntimeError('Adapter initialization failed')
+
+    scanner = ScannerSessions(
+        factory,
+        discovery_factory=broken_factory if capability == 'market_movement' else lambda _: ControlledDiscovery(),
+        supplementary_factories={'news': broken_factory} if capability == 'news' else {},
+        policy_settings={'required_sources': ['market_movement', 'news'] if capability == 'news' and required else ['market_movement']},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post('/scanner-sessions', json={
+            'supplementary_inputs': [_supplementary_input()] if admitted else [],
+        })
+        assert response.status_code == 202
+        terminal = _wait_for_terminal(client, response.json()['id'])
+        assert terminal['status'] == expected
+        diagnostic = next(item for item in terminal['diagnostics'] if item['capability'] == capability)
+        assert diagnostic['status'] == 'failed'
+        assert diagnostic['code'] == f'{capability}_setup_failed'
+        assert 'RuntimeError: Adapter initialization failed' in diagnostic['message']
+        assert any(item['id'] == terminal['id'] for item in client.get('/scanner-sessions').json())
+        retry = client.post('/scanner-sessions')
+        assert retry.status_code == 202
+        assert retry.json()['id'] != terminal['id']
+        _wait_for_terminal(client, retry.json()['id'])
+    engine.dispose()
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_supplementary_progress_and_failure_preserve_source_diagnostics(scanner_database_url, interrupted):
+    engine = create_engine(scanner_database_url)
+    release = Event()
+    reported = Event()
+
+    class ReportingDiscovery:
+        source = 'reporting_news'
+
+        async def discover(self, *, report_progress=None):
+            report_progress('News discovery in progress', {'news_pages': 2})
+            reported.set()
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+            raise DiscoveryUnavailable(
+                code='news_unavailable', message='News stopped after two pages',
+                details={'http_status': 503},
+                hits=(NormalizedDiscoveryHit(**_supplementary_input(source='news')),),
+            )
+
+    scanner = ScannerSessions(
+        sessionmaker(bind=engine, autoflush=False),
+        discovery_factory=lambda _: ControlledDiscovery(result=DiscoveryResult(
+            records_count=1, message='Market discovery complete',
+            details={'market_pages': 1},
+            hits=(NormalizedDiscoveryHit(**_supplementary_input(security_identifier='market-progress-security')),),
+        )),
+        supplementary_factories={'news': lambda _: ReportingDiscovery()},
+        policy_settings={'required_sources': ['market_movement', 'news']},
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+    with TestClient(app) as client:
+        started = client.post('/scanner-sessions').json()
+        assert reported.wait(2)
+        running = client.get(f"/scanner-sessions/{started['id']}").json()
+        market = running['diagnostics'][0]
+        assert market['details'] == {'market_pages': 1}
+        assert market['records_count'] == 1
+        assert running['diagnostics'][1]['message'] == 'News discovery in progress'
+        assert running['diagnostics'][1]['details'] == {'news_pages': 2}
+        if interrupted:
+            client.portal.call(scanner.shutdown)
+        else:
+            release.set()
+        terminal = _wait_for_terminal(client, started['id'])
+        assert terminal['status'] == 'partial'
+        assert terminal['diagnostics'][0] == market
+        news = terminal['diagnostics'][1]
+        assert news['details'] == ({'news_pages': 2} if interrupted else {'news_pages': 2, 'http_status': 503})
+        assert len(terminal['candidates']) == (1 if interrupted else 2)
+        assert news['records_count'] == (0 if interrupted else 1)
+        assert terminal['scanner_policy_settings']['currentness_max_age_seconds'] == 900
+        assert terminal['progress']['percent'] == 100
+    engine.dispose()
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'local_cancel', 'remote_cancel'])
+def test_slow_factory_keeps_lease_and_allows_cancellation(scanner_database_url, monkeypatch, outcome):
+    import app.scanner_sessions.module as orchestration
+
+    monkeypatch.setattr(orchestration, 'SCANNER_SESSION_LEASE_SECONDS', 0.3)
+    monkeypatch.setattr(orchestration, 'SCANNER_SESSION_HEARTBEAT_SECONDS', 0.02)
+    engine = create_engine(scanner_database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False)
+    setup_started, release_setup = Event(), Event()
+    discovery = ControlledDiscovery()
+    beginning = monotonic()
+
+    def clock():
+        return FIXED_START + timedelta(seconds=monotonic() - beginning)
+
+    def slow_factory(started_at):
+        setup_started.set()
+        assert release_setup.wait(5)
+        return discovery
+
+    owner = ScannerSessions(sessions, discovery_factory=slow_factory, clock=clock)
+    observer = ScannerSessions(sessions, discovery_factory=lambda _: ControlledDiscovery(), clock=clock)
+
+    def application(scanner):
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+        return app
+
+    with TestClient(application(owner)) as local, TestClient(application(observer)) as remote:
+        with ThreadPoolExecutor(max_workers=2) as requests:
+            start = requests.submit(local.post, '/scanner-sessions')
+            try:
+                assert setup_started.wait(2)
+                # Another process performs recovery reads while setup exceeds its lease.
+                active = next(item for item in remote.get('/scanner-sessions').json() if item['status'] == 'running')
+                deadline = monotonic() + 0.7
+                while monotonic() < deadline:
+                    latest = remote.get(f"/scanner-sessions/{active['id']}").json()
+                    assert latest['status'] == 'running'
+                    sleep(0.04)
+                started = start.result(timeout=1).json()
+                assert latest['id'] == started['id']
+                if outcome == 'complete':
+                    release_setup.set()
+                    terminal = _wait_for_terminal(remote, started['id'])
+                    assert terminal['status'] == 'completed'
+                    assert discovery.calls == 1
+                else:
+                    client = local if outcome == 'local_cancel' else remote
+                    cancellation = requests.submit(client.post, f"/scanner-sessions/{started['id']}/cancel")
+                    terminal = cancellation.result(timeout=1).json()
+                    assert terminal['status'] == 'cancelled'
+                    # Waiting for setup must not block shutdown or require releasing I/O.
+                    requests.submit(local.portal.call, owner.shutdown).result(timeout=1)
+                    release_setup.set()
+                    retry = remote.post('/scanner-sessions').json()
+                    _wait_for_terminal(remote, retry['id'])
+                    assert discovery.calls == 0
+                    assert remote.get(f"/scanner-sessions/{started['id']}").json() == terminal
+            finally:
+                release_setup.set()
+                start.result(timeout=2)
+                local.portal.call(owner.shutdown)
+    engine.dispose()
