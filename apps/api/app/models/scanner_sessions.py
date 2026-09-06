@@ -191,6 +191,7 @@ class DiscoveryHit(Base):
         Float, nullable=True
     )
     discovery_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     admission_outcome: Mapped[str] = mapped_column(String(20), nullable=False)
     admission_reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
 

@@ -103,6 +103,17 @@ as ready. Then sync market/news/filing data, review the paper account and orders
 guarded paper intents. External news and SEC records remain unscored until you review and promote
 them as catalysts.
 
+**Run scanner** freezes the latest recorded screener access for the configured credentials and
+endpoints. Re-run **Test Alpaca access** after changing credentials/endpoints or upgrading from
+checks that did not record configuration identity. Credentials alone never enable screeners.
+Accessible movers and most-active results are combined, preserving every Discovery Hit and
+source-specific reason while deduplicating Candidates by Security. Unverified, failed, or
+inapplicable sources trigger delayed consolidated bars over the verified Listing registry.
+Premarket always requires bars because daily screener rankings can still describe the prior
+regular session; closed runs skip screeners. Source decisions appear during progress and remain
+in diagnostics and dashboard badges. Screener SIP coverage has its own Data Tier with unspecified
+delay, never the delayed-bar contract. An empty Listing registry cannot supply the bar fallback.
+
 The web app calls the API through a same-origin `/api` proxy. Docker resolves that proxy to the API service, while local Next.js development defaults to `http://localhost:8000`.
 
 ## Paper automation safety

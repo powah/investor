@@ -39,6 +39,33 @@ def test_migrations_build_fresh_schema(tmp_path):
     }
 
 
+def test_discovery_provenance_upgrade_does_not_invent_historical_metadata(tmp_path):
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'discovery-provenance.sqlite'}"
+    config = _config(database_url)
+    command.upgrade(config, "d7e3a91b4f20")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO scanner_sessions (
+                id, status, stage, owner_id, heartbeat_at, started_at, trading_date,
+                market_phase, scanner_policy_version, scanner_policy_settings,
+                scoring_model_version, progress_completed, progress_total
+            ) VALUES (1, 'completed', 'completed', 'test', '2026-07-06', '2026-07-06',
+                      '2026-07-06', 'regular', 'v1', '{}', 'v1', 1, 1)
+        """))
+        connection.execute(text("""
+            INSERT INTO discovery_hits (scanner_session_id, source, source_reference,
+                observed_at, ticker, discovery_reason, admission_outcome, admission_reasons)
+            VALUES (1, 'manual', 'operator:1', '2026-07-06', 'OLD', 'Historical reason', 'unresolved', '[]')
+        """))
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        row = connection.execute(text("SELECT ticker, discovery_reason, provenance FROM discovery_hits")).one()
+        assert tuple(row) == ("OLD", "Historical reason", "{}")
+    engine.dispose()
+
+
 def test_legacy_import_migration_is_idempotent_and_preserves_only_known_values(tmp_path):
     database_url = f"sqlite+pysqlite:///{tmp_path / 'legacy-imports.sqlite'}"
     config = _config(database_url)

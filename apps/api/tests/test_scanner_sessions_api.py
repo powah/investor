@@ -49,7 +49,7 @@ class ControlledDiscovery:
         self.started = Event()
         self._lock = Lock()
 
-    async def discover(self) -> DiscoveryResult:
+    async def discover(self, *, report_progress=None) -> DiscoveryResult:
         with self._lock:
             self.calls += 1
         self.started.set()

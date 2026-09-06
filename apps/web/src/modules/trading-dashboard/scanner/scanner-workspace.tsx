@@ -594,6 +594,7 @@ function ScannerSessionPanel({
                 <p className="mt-1 text-xs">
                   {diagnostic.message ?? `${diagnostic.source} · ${diagnostic.required ? "required" : "supplementary"}`}
                 </p>
+                <DiscoverySourceBadges details={diagnostic.details} />
                 {diagnostic.details.data_tier === "delayed_consolidated" && (
                   <div className="mt-2 space-y-1 text-xs" aria-label="Market-Movement Discovery source contract">
                     <p className="font-semibold">Delayed consolidated bars · Not real-time</p>
@@ -620,6 +621,29 @@ function ScannerSessionPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function DiscoverySourceBadges({ details }: { details: Record<string, unknown> }) {
+  const sources = details.sources;
+  if (!sources || typeof sources !== "object" || Array.isArray(sources)) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2" aria-label="Discovery source selection">
+      {Object.entries(sources).map(([name, value]) => {
+        if (!value || typeof value !== "object") return null;
+        const source = value as Record<string, unknown>;
+        return (
+          <span key={name} className="rounded-lg bg-white px-2 py-1 text-xs ring-1 ring-slate-200">
+            {String(source.source ?? name)} · {String(source.status ?? "unknown")}
+            {source.reason ? ` · ${String(source.reason).replaceAll("_", " ")}` : ""}
+            {source.data_tier === "delayed_consolidated"
+              ? ` · Delayed consolidated · ${typeof source.expected_delay_seconds === "number" ? `${source.expected_delay_seconds / 60} min delay` : "Delay unknown"}`
+              : ""}
+            {source.data_tier === "screener_consolidated" ? " · SIP screener · Delay not specified" : ""}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -654,6 +678,11 @@ function SessionDiscoveryDetails({ scannerSession }: { scannerSession: ScannerSe
                 {hit.observed_listing.exchange ?? "Exchange unknown"} · {hit.observed_listing.instrument_type?.replaceAll("_", " ") ?? "Instrument unknown"}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">{hit.source} · {hit.source_reference}</p>
+              {hit.provenance && Object.keys(hit.provenance).length > 0 && (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {String(hit.provenance.data_tier ?? "Unknown Data Tier")} · Feed: {String(hit.provenance.feed ?? "Unknown")} · Provider event: {String(hit.provenance.provider_event_at ?? "Unknown")}
+                </p>
+              )}
               <p className="mt-1 text-[11px] text-slate-500">{hit.admission_reasons.map((reason) => reason.replaceAll("_", " ")).join(" · ")}</p>
             </article>
           ))}

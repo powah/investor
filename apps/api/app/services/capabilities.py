@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -36,6 +38,8 @@ async def probe_alpaca_capabilities(
             await provider.aclose()
 
     checks = [_to_model(result) for result in results]
+    for check in checks:
+        check.details = {**check.details, "configuration_fingerprint": capability_configuration_fingerprint(settings)}
     try:
         db.add_all(checks)
         db.commit()
@@ -45,6 +49,15 @@ async def probe_alpaca_capabilities(
     for check in checks:
         db.refresh(check)
     return checks
+
+
+def capability_configuration_fingerprint(settings: Settings) -> str:
+    """Bind recorded access to credentials and endpoints without persisting secrets."""
+    configuration = "\n".join((
+        settings.alpaca_api_key_id, settings.alpaca_api_secret_key,
+        settings.alpaca_data_base_url.rstrip("/"), settings.alpaca_trading_base_url.rstrip("/"),
+    ))
+    return hashlib.sha256(configuration.encode()).hexdigest()
 
 
 def latest_capability_checks(db: Session) -> list[ProviderCapabilityCheck]:

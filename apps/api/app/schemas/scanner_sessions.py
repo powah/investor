@@ -24,6 +24,7 @@ class NormalizedDiscoveryHit(BaseModel):
     observed_at: Optional[datetime] = None
     ticker: str = Field(min_length=1, max_length=24)
     discovery_reason: str = Field(min_length=1, max_length=500)
+    provenance: dict[str, Any] = Field(default_factory=dict)
     security_identifier_source: Optional[str] = Field(default=None, max_length=80)
     security_identifier: Optional[str] = Field(default=None, max_length=160)
     issuer_name: Optional[str] = Field(default=None, max_length=240)
@@ -93,6 +94,7 @@ class DiscoveryHitRead(BaseModel):
     observed_at: datetime
     ticker: str
     discovery_reason: str
+    provenance: dict[str, Any] = Field(default_factory=dict)
     observed_listing: ListingObservationRead
     admission_outcome: Literal["admitted", "rejected", "unresolved"]
     admission_reasons: list[str]
