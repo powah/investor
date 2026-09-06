@@ -6,6 +6,7 @@ ScannerSessionStatus = Literal["running", "completed", "partial", "failed", "can
 ScannerSessionStage = Literal[
     "starting",
     "market_movement_discovery",
+    "supplementary_discovery",
     "completed",
     "partial",
     "failed",
