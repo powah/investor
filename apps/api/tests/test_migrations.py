@@ -34,6 +34,7 @@ def test_migrations_build_fresh_schema(tmp_path):
     assert "listings" in inspector.get_table_names()
     assert "discovery_hits" in inspector.get_table_names()
     assert "scanner_session_candidates" in inspector.get_table_names()
+    assert "candidate_evidence" in inspector.get_table_names()
     assert "data_origin" in {
         column["name"] for column in inspector.get_columns("scanner_symbols")
     }
@@ -177,6 +178,7 @@ def test_migrations_adopt_the_pre_phase_zero_schema(tmp_path):
         for table in Base.metadata.sorted_tables
         if table.name
         not in {
+            "candidate_evidence",
             "discovery_hits",
             "legacy_imports",
             "listings",

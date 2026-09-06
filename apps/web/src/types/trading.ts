@@ -103,6 +103,28 @@ export type DiscoveryHit = {
   candidate_id: number | null;
 };
 
+export type CandidateEvidence = {
+  id: number;
+  evidence_type: string;
+  value_state: "known" | "unknown" | "verified_negative";
+  normalized_value: unknown;
+  source_reference: string;
+  event_at: string | null;
+  observed_at: string;
+  data_tier: string;
+  expected_delay_seconds: number | null;
+  freshness_policy_version: string;
+  freshness_result: "fresh" | "stale" | "unknown";
+  freshness_reason: string;
+  event_age_seconds: number | null;
+  observation_age_seconds: number | null;
+  freshness_evaluated_at: string;
+  supersedes_evidence_id: number | null;
+  supersession_type: "correction" | "new_observation" | null;
+  superseded_by_evidence_ids: number[];
+  supports_current_positive: boolean;
+};
+
 export type ScannerSessionCandidate = {
   id: number;
   security: SecurityIdentity;
@@ -110,6 +132,7 @@ export type ScannerSessionCandidate = {
   discovery_hit_ids: number[];
   discovery_sources: string[];
   discovery_reasons: string[];
+  evidence: CandidateEvidence[];
 };
 
 export type ScannerSession = {

@@ -301,6 +301,7 @@ describe("scanner workspace", () => {
           discovery_hit_ids: [30],
           discovery_sources: ["csv"],
           discovery_reasons: ["CSV activity screen"],
+          evidence: [],
         },
       ],
     });

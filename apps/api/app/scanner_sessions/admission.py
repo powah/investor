@@ -12,6 +12,7 @@ from app.models.scanner_sessions import (
     Security,
 )
 from app.schemas.scanner_sessions import NormalizedDiscoveryHit
+from app.scanner_sessions.evidence import append_discovery_evidence
 
 
 ELIGIBLE_EXCHANGES = {"nasdaq", "nyse", "nyse_american"}
@@ -256,29 +257,38 @@ def admit_discovery_hits(
                 db.add(candidate)
                 db.flush()
 
-        db.add(
-            DiscoveryHit(
-                scanner_session_id=session.id,
-                security_id=security.id if security is not None else None,
-                listing_id=listing.id if listing is not None else None,
-                candidate_id=candidate.id if candidate is not None else None,
-                source=item.source,
-                source_reference=item.source_reference.strip(),
-                observed_at=item.observed_at or observed_at,
-                ticker=ticker,
-                observed_exchange=exchange,
-                observed_listing_status=status,
-                observed_instrument_type=instrument_type,
-                observed_effective_from=item.effective_from,
-                observed_effective_to=item.effective_to,
-                observed_foreign_issuer=item.foreign_issuer,
-                observed_depositary_to_underlying_ratio=(
-                    item.depositary_to_underlying_ratio
-                ),
-                discovery_reason=item.discovery_reason.strip(),
-                provenance=item.provenance,
-                admission_outcome=outcome,
-                admission_reasons=reasons,
-            )
+        discovery_hit = DiscoveryHit(
+            scanner_session_id=session.id,
+            security_id=security.id if security is not None else None,
+            listing_id=listing.id if listing is not None else None,
+            candidate_id=candidate.id if candidate is not None else None,
+            source=item.source,
+            source_reference=item.source_reference.strip(),
+            observed_at=item.observed_at or observed_at,
+            ticker=ticker,
+            observed_exchange=exchange,
+            observed_listing_status=status,
+            observed_instrument_type=instrument_type,
+            observed_effective_from=item.effective_from,
+            observed_effective_to=item.effective_to,
+            observed_foreign_issuer=item.foreign_issuer,
+            observed_depositary_to_underlying_ratio=item.depositary_to_underlying_ratio,
+            discovery_reason=item.discovery_reason.strip(),
+            provenance=item.provenance,
+            admission_outcome=outcome,
+            admission_reasons=reasons,
         )
+        db.add(discovery_hit)
         db.flush()
+        if candidate is not None:
+            append_discovery_evidence(
+                db,
+                candidate=candidate,
+                source=item.source,
+                source_reference=item.source_reference,
+                ticker=ticker,
+                discovery_reason=item.discovery_reason,
+                provenance=item.provenance,
+                observed_at=item.observed_at or observed_at,
+                evaluated_at=observed_at,
+            )

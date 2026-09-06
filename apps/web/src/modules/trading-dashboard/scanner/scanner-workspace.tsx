@@ -702,12 +702,100 @@ function SessionDiscoveryDetails({ scannerSession }: { scannerSession: ScannerSe
                 {candidate.security.issuer_name ?? candidate.security.identifier} · {candidate.discovery_sources.join(" + ")}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">{candidate.discovery_reasons.join(" · ")}</p>
+              <CandidateEvidenceDetails evidence={candidate.evidence ?? []} />
             </article>
           ))}
         </div>
       </section>
     </div>
   );
+}
+
+function CandidateEvidenceDetails({
+  evidence,
+}: {
+  evidence: NonNullable<ScannerSession["candidates"][number]["evidence"]>;
+}) {
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-2" aria-label="Candidate Evidence">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+        Candidate Evidence ({evidence.length})
+      </div>
+      {evidence.length === 0 ? (
+        <p className="mt-1 text-[11px] text-slate-500">No sourced evidence recorded.</p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {evidence.map((item) => (
+            <div key={item.id} className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5 text-[11px]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-slate-800">{item.evidence_type.replaceAll("_", " ")}</span>
+                <div className="flex flex-wrap gap-1">
+                  <span className={`rounded px-1.5 py-0.5 font-semibold ${evidenceStateTone(item.value_state)}`}>
+                    {item.value_state.replaceAll("_", " ")}
+                  </span>
+                  <span className={`rounded px-1.5 py-0.5 font-semibold ${freshnessTone(item.freshness_result)}`}>
+                    {item.freshness_result}
+                  </span>
+                </div>
+              </div>
+              <p className="mt-1 text-slate-700">
+                Value: {formatEvidenceValue(item.value_state, item.normalized_value)} · {item.data_tier}
+                {item.expected_delay_seconds !== null ? ` · ${item.expected_delay_seconds / 60} min expected delay` : ""}
+              </p>
+              <p className="mt-1 text-slate-500">
+                Event/as-of: {formatTimestamp(item.event_at)} · Observed: {formatTimestamp(item.observed_at)}
+              </p>
+              <p className="mt-1 text-slate-500">Source: {item.source_reference} · {item.freshness_reason.replaceAll("_", " ")}</p>
+              {item.supersedes_evidence_id !== null && (
+                <p className="mt-1 text-slate-500">
+                  {item.supersession_type?.replaceAll("_", " ")} of Evidence #{item.supersedes_evidence_id}
+                </p>
+              )}
+              {item.superseded_by_evidence_ids.length > 0 && (
+                <p className="mt-1 text-slate-500">
+                  Superseded by Evidence #{item.superseded_by_evidence_ids.join(", #")}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatEvidenceValue(valueState: string, value: unknown) {
+  if (valueState === "unknown") {
+    return "Unknown";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function formatTimestamp(value: string | null) {
+  return value ? new Date(value).toLocaleString() : "Unknown";
+}
+
+function evidenceStateTone(valueState: string) {
+  if (valueState === "unknown") {
+    return "bg-amber-50 text-amber-800";
+  }
+  if (valueState === "verified_negative") {
+    return "bg-red-50 text-red-800";
+  }
+  return "bg-teal-50 text-teal-800";
+}
+
+function freshnessTone(result: string) {
+  if (result === "stale") {
+    return "bg-red-50 text-red-800";
+  }
+  if (result === "unknown") {
+    return "bg-amber-50 text-amber-800";
+  }
+  return "bg-blue-50 text-blue-800";
 }
 
 function ScannerToolbar({

@@ -1,0 +1,248 @@
+"""HTTP coverage for immutable Candidate Evidence and freshness states."""
+
+import asyncio
+from typing import Iterator
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.api.scanner_sessions import router
+from app.scanner_sessions import ScannerSessions, get_scanner_sessions
+from app.scanner_sessions.domain import DiscoveryResult
+from app.schemas.scanner_sessions import NormalizedDiscoveryHit
+from test_scanner_sessions_api import (
+    ControlledDiscovery,
+    FIXED_START,
+    _wait_for_terminal,
+    scanner_database_url,
+)
+
+
+def _candidate_hit(**changes) -> NormalizedDiscoveryHit:
+    payload = {
+        "source": "alpaca_delayed_bars",
+        "source_reference": "bar:SINT:2026-07-06T13:29:00Z",
+        "observed_at": FIXED_START,
+        "ticker": "SINT",
+        "discovery_reason": "Market movement: +10.00%",
+        "provenance": {
+            "data_tier": "delayed_consolidated",
+            "feed": "sip",
+            "expected_delay_seconds": 900,
+            "provider_event_at": "2026-07-06T13:29:00Z",
+        },
+        "security_identifier_source": "evidence-test",
+        "security_identifier": "security-sint",
+        "issuer_name": "Evidence Research Corp",
+        "exchange": "NASDAQ",
+        "listing_status": "active",
+        "instrument_type": "common_stock",
+        "effective_from": "2020-01-01",
+    }
+    payload.update(changes)
+    return NormalizedDiscoveryHit(**payload)
+
+
+@pytest.fixture
+def evidence_client(scanner_database_url: str) -> Iterator[TestClient]:
+    engine = create_engine(scanner_database_url, pool_pre_ping=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    discovery = ControlledDiscovery(
+        result=DiscoveryResult(
+            records_count=1,
+            message="Delayed evidence test discovery completed.",
+            details={
+                "data_tier": "delayed_consolidated",
+                "expected_delay_seconds": 900,
+                "provider_event_at": "2026-07-06T13:29:00Z",
+            },
+            hits=(_candidate_hit(),),
+        )
+    )
+    scanner_sessions = ScannerSessions(
+        session_factory,
+        discovery_factory=lambda started_at: discovery,
+        clock=lambda: FIXED_START,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner_sessions] = lambda: scanner_sessions
+    with TestClient(app) as client:
+        yield client
+    asyncio.run(scanner_sessions.shutdown())
+    engine.dispose()
+
+
+def _start_completed_session(client: TestClient) -> dict:
+    started = client.post("/scanner-sessions")
+    assert started.status_code == 202
+    return _wait_for_terminal(client, started.json()["id"])
+
+
+def test_delayed_consolidated_discovery_is_recorded_as_fresh_candidate_evidence(
+    evidence_client: TestClient,
+):
+    session = _start_completed_session(evidence_client)
+
+    evidence = session["candidates"][0]["evidence"]
+
+    assert len(evidence) == 1
+    assert evidence[0] == {
+        "id": evidence[0]["id"],
+        "evidence_type": "market_movement",
+        "value_state": "known",
+        "normalized_value": {
+            "ticker": "SINT",
+            "discovery_reason": "Market movement: +10.00%",
+        },
+        "source_reference": "bar:SINT:2026-07-06T13:29:00Z",
+        "event_at": "2026-07-06T13:29:00Z",
+        "observed_at": "2026-07-06T13:45:00Z",
+        "data_tier": "delayed_consolidated",
+        "expected_delay_seconds": 900,
+        "freshness_policy_version": "candidate-evidence-v1",
+        "freshness_result": "fresh",
+        "freshness_reason": "within_policy_limits",
+        "event_age_seconds": 960.0,
+        "observation_age_seconds": 0.0,
+        "freshness_evaluated_at": "2026-07-06T13:45:00Z",
+        "supersedes_evidence_id": None,
+        "supersession_type": None,
+        "superseded_by_evidence_ids": [],
+        "supports_current_positive": True,
+    }
+
+
+def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history(
+    evidence_client: TestClient,
+):
+    session = _start_completed_session(evidence_client)
+    candidate = session["candidates"][0]
+    candidate_url = f"/scanner-sessions/{session['id']}/candidates/{candidate['id']}/evidence"
+
+    stale_response = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.25,
+            "source_reference": "quote:sint:stale",
+            "event_at": "2026-07-06T13:14:00Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+        },
+    )
+    assert stale_response.status_code == 201
+    stale = stale_response.json()
+    assert stale["freshness_result"] == "stale"
+    assert stale["freshness_reason"] == "provider_event_too_old"
+    assert stale["event_age_seconds"] == 1860.0
+    assert stale["supports_current_positive"] is False
+
+    unknown_response = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "unknown",
+            "source_reference": "quote:sint:missing",
+            "event_at": "2026-07-06T13:44:00Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+        },
+    )
+    assert unknown_response.status_code == 201
+    unknown = unknown_response.json()
+    assert unknown["value_state"] == "unknown"
+    assert unknown["normalized_value"] is None
+    assert unknown["freshness_result"] == "fresh"
+    assert unknown["supports_current_positive"] is False
+
+    negative_response = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "above_vwap",
+            "value_state": "verified_negative",
+            "normalized_value": False,
+            "source_reference": "quote:sint:below-vwap",
+            "event_at": "2026-07-06T13:44:00Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+        },
+    )
+    assert negative_response.status_code == 201
+    negative = negative_response.json()
+    assert negative["value_state"] == "verified_negative"
+    assert negative["normalized_value"] is False
+    assert negative["freshness_result"] == "fresh"
+    assert negative["supports_current_positive"] is False
+
+    correction_response = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.30,
+            "source_reference": "quote:sint:corrected",
+            "event_at": "2026-07-06T13:44:30Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+            "supersedes_evidence_id": stale["id"],
+            "supersession_type": "correction",
+        },
+    )
+    assert correction_response.status_code == 201
+    correction = correction_response.json()
+    assert correction["supersedes_evidence_id"] == stale["id"]
+    assert correction["supersession_type"] == "correction"
+
+    new_observation_response = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.35,
+            "source_reference": "quote:sint:new-observation",
+            "event_at": "2026-07-06T13:45:00Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+            "supersedes_evidence_id": correction["id"],
+            "supersession_type": "new_observation",
+        },
+    )
+    assert new_observation_response.status_code == 201
+    new_observation = new_observation_response.json()
+    assert new_observation["supersession_type"] == "new_observation"
+
+    reread = evidence_client.get(f"/scanner-sessions/{session['id']}").json()
+    by_id = {item["id"]: item for item in reread["candidates"][0]["evidence"]}
+    assert by_id[stale["id"]]["normalized_value"] == 1.25
+    assert by_id[stale["id"]]["superseded_by_evidence_ids"] == [correction["id"]]
+    assert by_id[correction["id"]]["normalized_value"] == 1.30
+    assert by_id[correction["id"]]["superseded_by_evidence_ids"] == [new_observation["id"]]
+    assert by_id[new_observation["id"]]["normalized_value"] == 1.35
+
+
+def test_unknown_evidence_cannot_be_encoded_as_a_false_value(evidence_client: TestClient):
+    session = _start_completed_session(evidence_client)
+    candidate = session["candidates"][0]
+
+    response = evidence_client.post(
+        f"/scanner-sessions/{session['id']}/candidates/{candidate['id']}/evidence",
+        json={
+            "evidence_type": "above_vwap",
+            "value_state": "unknown",
+            "normalized_value": False,
+            "source_reference": "quote:sint:invalid-unknown",
+            "data_tier": "delayed_consolidated",
+        },
+    )
+
+    assert response.status_code == 422

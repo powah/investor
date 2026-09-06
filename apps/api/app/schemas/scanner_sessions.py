@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.scanner_session_types import (
     MarketPhase,
@@ -14,6 +14,9 @@ from app.scanner_session_types import (
 
 
 MAX_SUPPLEMENTARY_INPUTS = 1000
+EvidenceValueState = Literal["known", "unknown", "verified_negative"]
+FreshnessResult = Literal["fresh", "stale", "unknown"]
+EvidenceSupersessionType = Literal["correction", "new_observation"]
 
 
 class NormalizedDiscoveryHit(BaseModel):
@@ -54,6 +57,42 @@ class ScannerSessionStart(BaseModel):
     supplementary_inputs: list[SupplementaryDiscoveryInput] = Field(
         default_factory=list, max_length=MAX_SUPPLEMENTARY_INPUTS
     )
+
+
+class CandidateEvidenceCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    evidence_type: str = Field(min_length=1, max_length=80)
+    value_state: EvidenceValueState
+    normalized_value: Any | None = None
+    source_reference: str = Field(min_length=1, max_length=500)
+    event_at: Optional[datetime] = None
+    observed_at: Optional[datetime] = None
+    data_tier: str = Field(min_length=1, max_length=80)
+    expected_delay_seconds: Optional[int] = Field(default=None, ge=0)
+    supersedes_evidence_id: Optional[int] = Field(default=None, ge=1)
+    supersession_type: Optional[EvidenceSupersessionType] = None
+
+    @field_validator("event_at", "observed_at")
+    @classmethod
+    def evidence_times_must_include_timezone(
+        cls, value: Optional[datetime]
+    ) -> Optional[datetime]:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("evidence times must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_value_state_and_relationship(self) -> "CandidateEvidenceCreate":
+        if self.value_state == "unknown" and self.normalized_value is not None:
+            raise ValueError("Unknown Evidence must not carry a normalized value")
+        if self.value_state != "unknown" and self.normalized_value is None:
+            raise ValueError("Known and Verified Negative Evidence require a normalized value")
+        if (self.supersedes_evidence_id is None) != (self.supersession_type is None):
+            raise ValueError(
+                "supersedes_evidence_id and supersession_type must be provided together"
+            )
+        return self
 
 
 class SecurityRead(BaseModel):
@@ -103,6 +142,28 @@ class DiscoveryHitRead(BaseModel):
     candidate_id: Optional[int]
 
 
+class CandidateEvidenceRead(BaseModel):
+    id: int
+    evidence_type: str
+    value_state: EvidenceValueState
+    normalized_value: Any | None
+    source_reference: str
+    event_at: Optional[datetime]
+    observed_at: datetime
+    data_tier: str
+    expected_delay_seconds: Optional[int]
+    freshness_policy_version: str
+    freshness_result: FreshnessResult
+    freshness_reason: str
+    event_age_seconds: Optional[float]
+    observation_age_seconds: Optional[float]
+    freshness_evaluated_at: datetime
+    supersedes_evidence_id: Optional[int]
+    supersession_type: Optional[EvidenceSupersessionType]
+    superseded_by_evidence_ids: list[int] = Field(default_factory=list)
+    supports_current_positive: bool
+
+
 class CandidateRead(BaseModel):
     id: int
     security: SecurityRead
@@ -110,6 +171,7 @@ class CandidateRead(BaseModel):
     discovery_hit_ids: list[int]
     discovery_sources: list[str]
     discovery_reasons: list[str]
+    evidence: list[CandidateEvidenceRead]
 
 
 class ScannerSessionProgressRead(BaseModel):
