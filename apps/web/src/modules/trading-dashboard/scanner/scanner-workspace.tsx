@@ -883,8 +883,8 @@ function CandidateEvidenceDetails({
                   <span className={`rounded px-1.5 py-0.5 font-semibold ${evidenceStateTone(item.value_state)}`}>
                     {item.value_state.replaceAll("_", " ")}
                   </span>
-                  <span className={`rounded px-1.5 py-0.5 font-semibold ${freshnessTone(item.freshness_result)}`}>
-                    {item.freshness_result}
+                  <span className={`rounded px-1.5 py-0.5 font-semibold ${freshnessTone(item.current_freshness_result)}`}>
+                    {item.current_freshness_result}
                   </span>
                   <span className={`rounded px-1.5 py-0.5 font-semibold ${currentPositiveTone(item.supports_current_positive)}`}>
                     {item.supports_current_positive ? "supports current positive" : "does not support current positive"}
@@ -898,7 +898,12 @@ function CandidateEvidenceDetails({
               <p className="mt-1 text-slate-500">
                 Event/as-of: {formatTimestamp(item.event_at)} · Observed: {formatTimestamp(item.observed_at)}
               </p>
-              <p className="mt-1 text-slate-500">Source: {item.source_reference} · {item.freshness_reason.replaceAll("_", " ")}</p>
+              <p className="mt-1 text-slate-500">
+                Source: {item.source_reference} · Current: {item.current_freshness_reason.replaceAll("_", " ")}
+              </p>
+              <p className="mt-1 text-slate-500">
+                Recorded freshness: {item.recorded_freshness_result} at {formatTimestamp(item.recorded_freshness_evaluated_at)}
+              </p>
               {item.supersedes_evidence_id !== null && (
                 <p className="mt-1 text-slate-500">
                   {item.supersession_type?.replaceAll("_", " ")} of Evidence #{item.supersedes_evidence_id}

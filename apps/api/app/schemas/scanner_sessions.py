@@ -154,12 +154,17 @@ class CandidateEvidenceRead(BaseModel):
     observed_at: datetime
     data_tier: str
     expected_delay_seconds: Optional[int]
-    freshness_policy_version: str
-    freshness_result: FreshnessResult
-    freshness_reason: str
-    event_age_seconds: Optional[float]
-    observation_age_seconds: Optional[float]
-    freshness_evaluated_at: datetime
+    recorded_freshness_policy_version: str
+    recorded_freshness_result: FreshnessResult
+    recorded_freshness_reason: str
+    recorded_event_age_seconds: Optional[float]
+    recorded_observation_age_seconds: Optional[float]
+    recorded_freshness_evaluated_at: datetime
+    current_freshness_result: FreshnessResult
+    current_freshness_reason: str
+    current_event_age_seconds: Optional[float]
+    current_observation_age_seconds: Optional[float]
+    current_freshness_evaluated_at: datetime
     supersedes_evidence_id: Optional[int]
     supersession_type: Optional[EvidenceSupersessionType]
     superseded_by_evidence_ids: list[int] = Field(default_factory=list)

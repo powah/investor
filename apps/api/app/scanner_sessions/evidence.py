@@ -186,6 +186,21 @@ def evaluate_freshness(
     )
 
 
+def evaluate_current_freshness(
+    evidence: CandidateEvidence,
+    *,
+    evaluated_at: datetime,
+) -> FreshnessAssessment:
+    return evaluate_freshness(
+        evidence_type=evidence.evidence_type,
+        data_tier=evidence.data_tier,
+        event_at=evidence.event_at,
+        observed_at=evidence.observed_at,
+        evaluated_at=evaluated_at,
+        policy_version=evidence.freshness_policy_version,
+    )
+
+
 def append_candidate_evidence(
     db: Session,
     *,
@@ -327,6 +342,7 @@ def supports_current_positive(
     *,
     superseded: bool = False,
     evaluated_at: datetime | None = None,
+    assessment: FreshnessAssessment | None = None,
 ) -> bool:
     """Only currently fresh, known, current evidence may support a positive conclusion.
 
@@ -337,12 +353,8 @@ def supports_current_positive(
 
     if superseded or evidence.value_state != "known":
         return False
-    assessment = evaluate_freshness(
-        evidence_type=evidence.evidence_type,
-        data_tier=evidence.data_tier,
-        event_at=evidence.event_at,
-        observed_at=evidence.observed_at,
+    current_assessment = assessment or evaluate_current_freshness(
+        evidence,
         evaluated_at=evaluated_at or datetime.now(timezone.utc),
-        policy_version=evidence.freshness_policy_version,
     )
-    return assessment.result == "fresh"
+    return current_assessment.result == "fresh"

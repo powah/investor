@@ -111,12 +111,17 @@ def test_delayed_consolidated_discovery_is_recorded_as_fresh_candidate_evidence(
         "observed_at": "2026-07-06T13:45:00Z",
         "data_tier": "delayed_consolidated",
         "expected_delay_seconds": 900,
-        "freshness_policy_version": "candidate-evidence-v1",
-        "freshness_result": "fresh",
-        "freshness_reason": "within_policy_limits",
-        "event_age_seconds": 960.0,
-        "observation_age_seconds": 0.0,
-        "freshness_evaluated_at": "2026-07-06T13:45:00Z",
+        "recorded_freshness_policy_version": "candidate-evidence-v1",
+        "recorded_freshness_result": "fresh",
+        "recorded_freshness_reason": "within_policy_limits",
+        "recorded_event_age_seconds": 960.0,
+        "recorded_observation_age_seconds": 0.0,
+        "recorded_freshness_evaluated_at": "2026-07-06T13:45:00Z",
+        "current_freshness_result": "fresh",
+        "current_freshness_reason": "within_policy_limits",
+        "current_event_age_seconds": 960.0,
+        "current_observation_age_seconds": 0.0,
+        "current_freshness_evaluated_at": "2026-07-06T13:45:00Z",
         "supersedes_evidence_id": None,
         "supersession_type": None,
         "superseded_by_evidence_ids": [],
@@ -131,7 +136,8 @@ def test_fresh_evidence_stops_supporting_current_positives_as_time_passes(
     session = _start_completed_session(evidence_client)
     candidate = session["candidates"][0]
     initial = candidate["evidence"][0]
-    assert initial["freshness_result"] == "fresh"
+    assert initial["recorded_freshness_result"] == "fresh"
+    assert initial["current_freshness_result"] == "fresh"
     assert initial["supports_current_positive"] is True
 
     evidence_clock[0] = FIXED_START + timedelta(minutes=16)
@@ -139,7 +145,10 @@ def test_fresh_evidence_stops_supporting_current_positives_as_time_passes(
 
     assert reread.status_code == 200
     current = reread.json()["candidates"][0]["evidence"][0]
-    assert current["freshness_result"] == "fresh"
+    assert current["recorded_freshness_result"] == "fresh"
+    assert current["current_freshness_result"] == "stale"
+    assert current["current_freshness_reason"] == "provider_event_too_old"
+    assert current["current_event_age_seconds"] == 1920.0
     assert current["supports_current_positive"] is False
 
 
@@ -165,9 +174,10 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     )
     assert stale_response.status_code == 201
     stale = stale_response.json()
-    assert stale["freshness_result"] == "stale"
-    assert stale["freshness_reason"] == "provider_event_too_old"
-    assert stale["event_age_seconds"] == 1860.0
+    assert stale["recorded_freshness_result"] == "stale"
+    assert stale["current_freshness_result"] == "stale"
+    assert stale["recorded_freshness_reason"] == "provider_event_too_old"
+    assert stale["recorded_event_age_seconds"] == 1860.0
     assert stale["supports_current_positive"] is False
 
     causally_impossible = evidence_client.post(
@@ -185,8 +195,9 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     )
     assert causally_impossible.status_code == 201
     causal = causally_impossible.json()
-    assert causal["freshness_result"] == "unknown"
-    assert causal["freshness_reason"] == "event_after_observation"
+    assert causal["recorded_freshness_result"] == "unknown"
+    assert causal["current_freshness_result"] == "unknown"
+    assert causal["recorded_freshness_reason"] == "event_after_observation"
     assert causal["supports_current_positive"] is False
 
     mismatched_correction = evidence_client.post(
@@ -223,7 +234,8 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     unknown = unknown_response.json()
     assert unknown["value_state"] == "unknown"
     assert unknown["normalized_value"] is None
-    assert unknown["freshness_result"] == "fresh"
+    assert unknown["recorded_freshness_result"] == "fresh"
+    assert unknown["current_freshness_result"] == "fresh"
     assert unknown["supports_current_positive"] is False
 
     negative_response = evidence_client.post(
@@ -243,7 +255,8 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     negative = negative_response.json()
     assert negative["value_state"] == "verified_negative"
     assert negative["normalized_value"] is False
-    assert negative["freshness_result"] == "fresh"
+    assert negative["recorded_freshness_result"] == "fresh"
+    assert negative["current_freshness_result"] == "fresh"
     assert negative["supports_current_positive"] is False
 
     correction_response = evidence_client.post(

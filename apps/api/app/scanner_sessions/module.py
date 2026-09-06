@@ -32,6 +32,7 @@ from app.scanner_sessions.domain import (
 )
 from app.scanner_sessions.evidence import (
     append_candidate_evidence,
+    evaluate_current_freshness,
     supports_current_positive,
 )
 from app.schemas.scanner_sessions import (
@@ -785,6 +786,10 @@ class ScannerSessions:
             for item in candidate_evidence
             if item.supersedes_evidence_id == evidence.id
         ]
+        current_assessment = evaluate_current_freshness(
+            evidence,
+            evaluated_at=evaluated_at,
+        )
         return CandidateEvidenceRead(
             id=evidence.id,
             evidence_type=evidence.evidence_type,
@@ -795,12 +800,17 @@ class ScannerSessions:
             observed_at=evidence.observed_at,
             data_tier=evidence.data_tier,
             expected_delay_seconds=evidence.expected_delay_seconds,
-            freshness_policy_version=evidence.freshness_policy_version,
-            freshness_result=evidence.freshness_result,
-            freshness_reason=evidence.freshness_reason,
-            event_age_seconds=evidence.event_age_seconds,
-            observation_age_seconds=evidence.observation_age_seconds,
-            freshness_evaluated_at=evidence.freshness_evaluated_at,
+            recorded_freshness_policy_version=evidence.freshness_policy_version,
+            recorded_freshness_result=evidence.freshness_result,
+            recorded_freshness_reason=evidence.freshness_reason,
+            recorded_event_age_seconds=evidence.event_age_seconds,
+            recorded_observation_age_seconds=evidence.observation_age_seconds,
+            recorded_freshness_evaluated_at=evidence.freshness_evaluated_at,
+            current_freshness_result=current_assessment.result,
+            current_freshness_reason=current_assessment.reason,
+            current_event_age_seconds=current_assessment.event_age_seconds,
+            current_observation_age_seconds=current_assessment.observation_age_seconds,
+            current_freshness_evaluated_at=evaluated_at,
             supersedes_evidence_id=evidence.supersedes_evidence_id,
             supersession_type=evidence.supersession_type,
             superseded_by_evidence_ids=superseded_by_evidence_ids,
@@ -808,6 +818,7 @@ class ScannerSessions:
                 evidence,
                 superseded=bool(superseded_by_evidence_ids),
                 evaluated_at=evaluated_at,
+                assessment=current_assessment,
             ),
         )
 
