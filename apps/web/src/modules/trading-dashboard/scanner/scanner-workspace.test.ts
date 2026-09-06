@@ -376,7 +376,7 @@ describe("scanner workspace", () => {
               supersedes_evidence_id: 42,
               supersession_type: "new_observation",
               superseded_by_evidence_ids: [],
-              supports_current_positive: true,
+              supports_current_positive: false,
             },
             {
               id: 44,
@@ -431,6 +431,8 @@ describe("scanner workspace", () => {
     expect(evidenceRegion).toHaveTextContent("unknown");
     expect(evidenceRegion).toHaveTextContent("fresh");
     expect(evidenceRegion).toHaveTextContent("stale");
+    expect(evidenceRegion).toHaveTextContent("supports current positive");
+    expect(evidenceRegion).toHaveTextContent("does not support current positive");
     expect(evidenceRegion).toHaveTextContent("delayed_consolidated");
     expect(evidenceRegion).toHaveTextContent("15 min expected delay");
     expect(evidenceRegion).toHaveTextContent("Event/as-of:");

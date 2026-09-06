@@ -87,6 +87,8 @@ class AlpacaScreenerDiscovery:
                         "source": self.source, "ticker": ticker,
                         "source_reference": f"{endpoint}:{group}:{rank}:{ticker}:{event_at.isoformat()}",
                         "observed_at": observed_at, "discovery_reason": reason,
+                        "evidence_type": "volume" if group == "most_actives" else "market_movement",
+                        "evidence_value": metric,
                         "provenance": metadata,
                     })))
         except (KeyError, TypeError, ValueError, AttributeError) as exc:

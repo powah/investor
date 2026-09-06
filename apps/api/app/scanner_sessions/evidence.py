@@ -214,6 +214,9 @@ def append_candidate_evidence(
     if supersession_type not in {None, "correction", "new_observation"}:
         raise CandidateEvidenceValidationError("Unsupported Candidate Evidence supersession type")
 
+    observed_time = _utc(observed_at)
+    evaluated_time = _utc(evaluated_at)
+    event_time = _utc(event_at) if event_at is not None else None
     if supersedes_evidence_id is not None:
         previous = (
             db.query(CandidateEvidence)
@@ -231,10 +234,20 @@ def append_candidate_evidence(
             raise CandidateEvidenceValidationError(
                 "Candidate Evidence supersession must use the same evidence type as its predecessor"
             )
-
-    observed_time = _utc(observed_at)
-    evaluated_time = _utc(evaluated_at)
-    event_time = _utc(event_at) if event_at is not None else None
+        if supersession_type == "new_observation":
+            previous_observed_time = _utc(previous.observed_at)
+            if observed_time < previous_observed_time:
+                raise CandidateEvidenceValidationError(
+                    "New observations must not precede their predecessor's observation time"
+                )
+            if (
+                event_time is not None
+                and previous.event_at is not None
+                and event_time < _utc(previous.event_at)
+            ):
+                raise CandidateEvidenceValidationError(
+                    "New observations must not precede their predecessor's event time"
+                )
     normalized_tier = data_tier.strip().lower()
     resolved_expected_delay = expected_delay_seconds
     if resolved_expected_delay is None and normalized_tier in {"delayed_consolidated", "delayed_sip"}:
@@ -276,8 +289,8 @@ def append_discovery_evidence(
     candidate: ScannerSessionCandidate,
     source: str,
     source_reference: str,
-    ticker: str,
-    discovery_reason: str,
+    evidence_type: str,
+    evidence_value: Any | None,
     provenance: dict[str, Any],
     observed_at: datetime,
     evaluated_at: datetime,
@@ -285,15 +298,13 @@ def append_discovery_evidence(
     """Translate an admitted Discovery Hit into immutable Candidate Evidence."""
 
     data_tier = _data_tier_for_source(source, provenance)
+    value_state = "known" if evidence_value is not None else "unknown"
     return append_candidate_evidence(
         db,
         candidate=candidate,
-        evidence_type="market_movement",
-        value_state="known",
-        normalized_value={
-            "ticker": ticker,
-            "discovery_reason": discovery_reason,
-        },
+        evidence_type=evidence_type,
+        value_state=value_state,
+        normalized_value=evidence_value,
         source_reference=source_reference,
         event_at=_provider_event_at(provenance),
         observed_at=observed_at,

@@ -886,6 +886,9 @@ function CandidateEvidenceDetails({
                   <span className={`rounded px-1.5 py-0.5 font-semibold ${freshnessTone(item.freshness_result)}`}>
                     {item.freshness_result}
                   </span>
+                  <span className={`rounded px-1.5 py-0.5 font-semibold ${currentPositiveTone(item.supports_current_positive)}`}>
+                    {item.supports_current_positive ? "supports current positive" : "does not support current positive"}
+                  </span>
                 </div>
               </div>
               <p className="mt-1 text-slate-700">
@@ -946,6 +949,10 @@ function freshnessTone(result: string) {
     return "bg-amber-50 text-amber-800";
   }
   return "bg-blue-50 text-blue-800";
+}
+
+function currentPositiveTone(supportsCurrentPositive: boolean) {
+  return supportsCurrentPositive ? "bg-teal-50 text-teal-800" : "bg-amber-50 text-amber-800";
 }
 
 function ScannerToolbar({

@@ -29,6 +29,8 @@ def _candidate_hit(**changes) -> NormalizedDiscoveryHit:
         "observed_at": FIXED_START,
         "ticker": "SINT",
         "discovery_reason": "Market movement: +10.00%",
+        "evidence_type": "market_movement",
+        "evidence_value": 10.0,
         "provenance": {
             "data_tier": "delayed_consolidated",
             "feed": "sip",
@@ -103,10 +105,7 @@ def test_delayed_consolidated_discovery_is_recorded_as_fresh_candidate_evidence(
         "id": evidence[0]["id"],
         "evidence_type": "market_movement",
         "value_state": "known",
-        "normalized_value": {
-            "ticker": "SINT",
-            "discovery_reason": "Market movement: +10.00%",
-        },
+        "normalized_value": 10.0,
         "source_reference": "bar:SINT:2026-07-06T13:29:00Z",
         "event_at": "2026-07-06T13:29:00Z",
         "observed_at": "2026-07-06T13:45:00Z",
@@ -266,6 +265,42 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     assert new_observation_response.status_code == 201
     new_observation = new_observation_response.json()
     assert new_observation["supersession_type"] == "new_observation"
+
+    out_of_order_event = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.36,
+            "source_reference": "quote:sint:older-event",
+            "event_at": "2026-07-06T13:44:30Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+            "supersedes_evidence_id": new_observation["id"],
+            "supersession_type": "new_observation",
+        },
+    )
+    assert out_of_order_event.status_code == 422
+    assert "event time" in out_of_order_event.json()["detail"]
+
+    out_of_order_observation = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.37,
+            "source_reference": "quote:sint:older-observation",
+            "event_at": "2026-07-06T13:45:00Z",
+            "observed_at": "2026-07-06T13:44:30Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+            "supersedes_evidence_id": new_observation["id"],
+            "supersession_type": "new_observation",
+        },
+    )
+    assert out_of_order_observation.status_code == 422
+    assert "observation time" in out_of_order_observation.json()["detail"]
 
     reread = evidence_client.get(f"/scanner-sessions/{session['id']}").json()
     by_id = {item["id"]: item for item in reread["candidates"][0]["evidence"]}

@@ -260,12 +260,24 @@ class ScannerSessions:
         payload: CandidateEvidenceCreate,
     ) -> CandidateEvidenceRead:
         with self._session_factory() as db:
-            session = self._by_id(db, session_id)
-            candidate = next(
-                (item for item in session.candidates if item.id == candidate_id),
-                None,
+            candidate = (
+                db.query(ScannerSessionCandidate)
+                .filter(
+                    ScannerSessionCandidate.id == candidate_id,
+                    ScannerSessionCandidate.scanner_session_id == session_id,
+                )
+                .one_or_none()
             )
             if candidate is None:
+                session_exists = (
+                    db.query(ScannerSession.id)
+                    .filter(ScannerSession.id == session_id)
+                    .scalar()
+                )
+                if session_exists is None:
+                    raise ScannerSessionNotFound(
+                        f"Scanner Session {session_id} was not found."
+                    )
                 raise ScannerSessionCandidateNotFound(
                     f"Candidate {candidate_id} was not found in Scanner Session {session_id}."
                 )

@@ -51,6 +51,8 @@ def test_real_shaped_screeners_retain_occurrences_and_provenance(kind, payload, 
     assert hit.observed_at == NOW
     assert hit.security_identifier is None
     assert hit.discovery_reason.startswith("Mover gainers: +10.00%" if kind == "movers" else "Most active: 150,000 shares")
+    assert hit.evidence_type == ("market_movement" if kind == "movers" else "volume")
+    assert hit.evidence_value == (10 if kind == "movers" else 150000)
     assert requests[0].url.params["top"] == "50"
     assert requests[0].headers["APCA-API-KEY-ID"] == "key"
 

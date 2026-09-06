@@ -51,6 +51,10 @@ def test_real_shaped_bars_normalize_reasons_and_source_contract():
     assert all(hit.ticker == "SINT" for hit in result.hits)
     assert result.hits[0].discovery_reason.startswith("Market movement: +10.00%")
     assert result.hits[1].discovery_reason.startswith("Activity: 150,000 shares")
+    assert result.hits[0].evidence_type == "market_movement"
+    assert result.hits[0].evidence_value == 10.0
+    assert result.hits[1].evidence_type == "volume"
+    assert result.hits[1].evidence_value == 150000.0
     assert result.hits[0].observed_at == NOW
     assert result.hits[0].source_reference.endswith("2026-07-06T13:29:00+00:00")
     assert result.details["data_tier"] == "delayed_consolidated"
