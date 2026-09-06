@@ -1308,3 +1308,70 @@ def test_supplementary_progress_and_failure_preserve_source_diagnostics(scanner_
         assert terminal['scanner_policy_settings']['currentness_max_age_seconds'] == 900
         assert terminal['progress']['percent'] == 100
     engine.dispose()
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'local_cancel', 'remote_cancel'])
+def test_slow_factory_keeps_lease_and_allows_cancellation(scanner_database_url, monkeypatch, outcome):
+    import app.scanner_sessions.module as orchestration
+
+    monkeypatch.setattr(orchestration, 'SCANNER_SESSION_LEASE_SECONDS', 0.3)
+    monkeypatch.setattr(orchestration, 'SCANNER_SESSION_HEARTBEAT_SECONDS', 0.02)
+    engine = create_engine(scanner_database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False)
+    setup_started, release_setup = Event(), Event()
+    discovery = ControlledDiscovery()
+    beginning = monotonic()
+
+    def clock():
+        return FIXED_START + timedelta(seconds=monotonic() - beginning)
+
+    def slow_factory(started_at):
+        setup_started.set()
+        assert release_setup.wait(5)
+        return discovery
+
+    owner = ScannerSessions(sessions, discovery_factory=slow_factory, clock=clock)
+    observer = ScannerSessions(sessions, discovery_factory=lambda _: ControlledDiscovery(), clock=clock)
+
+    def application(scanner):
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_scanner_sessions] = lambda: scanner
+        return app
+
+    with TestClient(application(owner)) as local, TestClient(application(observer)) as remote:
+        with ThreadPoolExecutor(max_workers=2) as requests:
+            start = requests.submit(local.post, '/scanner-sessions')
+            try:
+                assert setup_started.wait(2)
+                # Another process performs recovery reads while setup exceeds its lease.
+                active = next(item for item in remote.get('/scanner-sessions').json() if item['status'] == 'running')
+                deadline = monotonic() + 0.7
+                while monotonic() < deadline:
+                    latest = remote.get(f"/scanner-sessions/{active['id']}").json()
+                    assert latest['status'] == 'running'
+                    sleep(0.04)
+                started = start.result(timeout=1).json()
+                assert latest['id'] == started['id']
+                if outcome == 'complete':
+                    release_setup.set()
+                    terminal = _wait_for_terminal(remote, started['id'])
+                    assert terminal['status'] == 'completed'
+                    assert discovery.calls == 1
+                else:
+                    client = local if outcome == 'local_cancel' else remote
+                    cancellation = requests.submit(client.post, f"/scanner-sessions/{started['id']}/cancel")
+                    terminal = cancellation.result(timeout=1).json()
+                    assert terminal['status'] == 'cancelled'
+                    # Waiting for setup must not block shutdown or require releasing I/O.
+                    requests.submit(local.portal.call, owner.shutdown).result(timeout=1)
+                    release_setup.set()
+                    retry = remote.post('/scanner-sessions').json()
+                    _wait_for_terminal(remote, retry['id'])
+                    assert discovery.calls == 0
+                    assert remote.get(f"/scanner-sessions/{started['id']}").json() == terminal
+            finally:
+                release_setup.set()
+                start.result(timeout=2)
+                local.portal.call(owner.shutdown)
+    engine.dispose()

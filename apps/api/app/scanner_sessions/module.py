@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -355,7 +355,9 @@ class ScannerSessions:
                 try:
                     # Construct adapters only after the attempt is durable. Setup
                     # failures follow the same required/optional rules as discovery.
-                    discovery = factory(started_at)
+                    discovery = await self._with_heartbeat(
+                        session_id, asyncio.to_thread(factory, started_at),
+                    )
                     with self._session_factory() as db:
                         session = self._owned_active(db, session_id, for_update=True)
                         if session is None:
@@ -445,21 +447,28 @@ class ScannerSessions:
                 session.heartbeat_at = self._clock()
                 db.commit()
 
-        discovery_task = asyncio.create_task(discovery.discover(report_progress=report_progress))
+        return await self._with_heartbeat(
+            session_id, discovery.discover(report_progress=report_progress),
+        )
+
+    async def _with_heartbeat[T](
+        self, session_id: int, work: Coroutine[Any, Any, T],
+    ) -> T:
+        work_task = asyncio.create_task(work)
         try:
             while True:
                 done, _ = await asyncio.wait(
-                    {discovery_task},
+                    {work_task},
                     timeout=SCANNER_SESSION_HEARTBEAT_SECONDS,
                 )
-                if discovery_task in done:
-                    return await discovery_task
+                if work_task in done:
+                    return await work_task
                 if not self._heartbeat(session_id):
                     raise _ScannerRunOwnershipLost
         finally:
-            if not discovery_task.done():
-                discovery_task.cancel()
-                await asyncio.gather(discovery_task, return_exceptions=True)
+            if not work_task.done():
+                work_task.cancel()
+                await asyncio.gather(work_task, return_exceptions=True)
 
     def _heartbeat(self, session_id: int) -> bool:
         with self._session_factory() as db:

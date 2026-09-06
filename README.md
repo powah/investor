@@ -207,3 +207,8 @@ completion. Unknown Evidence and low Evidence Coverage do not change lifecycle
 status. Additional discovery adapters can be supplied through the Scanner Sessions
 module's `supplementary_factories` interface; production currently runs required
 Market-Movement Discovery with manual and CSV supplementary inputs.
+
+Adapter construction runs in a worker thread under the same lease heartbeat as
+discovery. Cancelling a run stops awaiting setup; synchronous initialization I/O
+already executing in that thread may finish later, but its result is discarded
+and cannot start discovery or change the terminal attempt.
