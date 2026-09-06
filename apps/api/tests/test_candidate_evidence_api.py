@@ -227,6 +227,7 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     assert by_id[stale["id"]]["superseded_by_evidence_ids"] == [correction["id"]]
     assert by_id[correction["id"]]["normalized_value"] == 1.30
     assert by_id[correction["id"]]["superseded_by_evidence_ids"] == [new_observation["id"]]
+    assert by_id[correction["id"]]["supports_current_positive"] is False
     assert by_id[new_observation["id"]]["normalized_value"] == 1.35
 
 

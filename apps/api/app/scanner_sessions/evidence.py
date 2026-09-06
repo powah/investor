@@ -291,7 +291,15 @@ def append_discovery_evidence(
     )
 
 
-def supports_current_positive(evidence: CandidateEvidence) -> bool:
-    """Only fresh, known evidence may support a current positive conclusion."""
+def supports_current_positive(
+    evidence: CandidateEvidence,
+    *,
+    superseded: bool = False,
+) -> bool:
+    """Only fresh, known, current evidence may support a positive conclusion."""
 
-    return evidence.value_state == "known" and evidence.freshness_result == "fresh"
+    return (
+        not superseded
+        and evidence.value_state == "known"
+        and evidence.freshness_result == "fresh"
+    )

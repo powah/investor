@@ -641,6 +641,11 @@ class ScannerSessions:
         *,
         candidate_evidence: tuple[CandidateEvidence, ...] | list[CandidateEvidence],
     ) -> CandidateEvidenceRead:
+        superseded_by_evidence_ids = [
+            item.id
+            for item in candidate_evidence
+            if item.supersedes_evidence_id == evidence.id
+        ]
         return CandidateEvidenceRead(
             id=evidence.id,
             evidence_type=evidence.evidence_type,
@@ -659,12 +664,11 @@ class ScannerSessions:
             freshness_evaluated_at=evidence.freshness_evaluated_at,
             supersedes_evidence_id=evidence.supersedes_evidence_id,
             supersession_type=evidence.supersession_type,
-            superseded_by_evidence_ids=[
-                item.id
-                for item in candidate_evidence
-                if item.supersedes_evidence_id == evidence.id
-            ],
-            supports_current_positive=supports_current_positive(evidence),
+            superseded_by_evidence_ids=superseded_by_evidence_ids,
+            supports_current_positive=supports_current_positive(
+                evidence,
+                superseded=bool(superseded_by_evidence_ids),
+            ),
         )
 
     @classmethod
