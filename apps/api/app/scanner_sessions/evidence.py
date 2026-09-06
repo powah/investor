@@ -136,6 +136,14 @@ def evaluate_freshness(
             event_age_seconds=event_age,
             observation_age_seconds=observation_age,
         )
+    if event_time is not None and event_time > observed_time:
+        return FreshnessAssessment(
+            policy_version=policy_version,
+            result="unknown",
+            reason="event_after_observation",
+            event_age_seconds=event_age,
+            observation_age_seconds=observation_age,
+        )
     if event_time is not None and event_age is not None and event_age < 0:
         return FreshnessAssessment(
             policy_version=policy_version,

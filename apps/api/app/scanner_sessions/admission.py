@@ -280,7 +280,7 @@ def admit_discovery_hits(
         )
         db.add(discovery_hit)
         db.flush()
-        if candidate is not None:
+        if candidate is not None and item.evidence_type is not None:
             append_discovery_evidence(
                 db,
                 candidate=candidate,

@@ -27,7 +27,7 @@ class NormalizedDiscoveryHit(BaseModel):
     observed_at: Optional[datetime] = None
     ticker: str = Field(min_length=1, max_length=24)
     discovery_reason: str = Field(min_length=1, max_length=500)
-    evidence_type: str = Field(default="market_movement", min_length=1, max_length=80)
+    evidence_type: Optional[str] = Field(default=None, min_length=1, max_length=80)
     evidence_value: Any | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)
     security_identifier_source: Optional[str] = Field(default=None, max_length=80)

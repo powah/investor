@@ -170,6 +170,25 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     assert stale["event_age_seconds"] == 1860.0
     assert stale["supports_current_positive"] is False
 
+    causally_impossible = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "market_price",
+            "value_state": "known",
+            "normalized_value": 1.28,
+            "source_reference": "quote:sint:causally-impossible",
+            "event_at": "2026-07-06T13:44:00Z",
+            "observed_at": "2026-07-06T13:43:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+        },
+    )
+    assert causally_impossible.status_code == 201
+    causal = causally_impossible.json()
+    assert causal["freshness_result"] == "unknown"
+    assert causal["freshness_reason"] == "event_after_observation"
+    assert causal["supports_current_positive"] is False
+
     mismatched_correction = evidence_client.post(
         candidate_url,
         json={
