@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -158,6 +159,81 @@ class ScannerSessionCandidate(Base):
     security: Mapped[Security] = relationship()
     discovery_hits: Mapped[list[DiscoveryHit]] = relationship(
         back_populates="candidate", order_by="DiscoveryHit.id"
+    )
+    evidence: Mapped[list[CandidateEvidence]] = relationship(
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        order_by="CandidateEvidence.id",
+    )
+
+
+class CandidateEvidence(Base):
+    """Immutable observation of what was known about a Candidate.
+
+    Evidence is append-only at the service boundary. A later row points back to
+    the row it corrects or supersedes instead of mutating historical evidence.
+    """
+
+    __tablename__ = "candidate_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "value_state IN ('known', 'unknown', 'verified_negative')",
+            name="ck_candidate_evidence_value_state",
+        ),
+        CheckConstraint(
+            "freshness_result IN ('fresh', 'stale', 'unknown')",
+            name="ck_candidate_evidence_freshness_result",
+        ),
+        CheckConstraint(
+            "supersession_type IS NULL OR supersession_type IN ('correction', 'new_observation')",
+            name="ck_candidate_evidence_supersession_type",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("scanner_session_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    value_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    normalized_value: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    source_reference: Mapped[str] = mapped_column(String(500), nullable=False)
+    event_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    data_tier: Mapped[str] = mapped_column(String(80), nullable=False)
+    expected_delay_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    freshness_policy_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    freshness_result: Mapped[str] = mapped_column(String(16), nullable=False)
+    freshness_reason: Mapped[str] = mapped_column(String(160), nullable=False)
+    event_age_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    observation_age_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    freshness_evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    supersedes_evidence_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("candidate_evidence.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    supersession_type: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    candidate: Mapped[ScannerSessionCandidate] = relationship(back_populates="evidence")
+    supersedes: Mapped[Optional[CandidateEvidence]] = relationship(
+        "CandidateEvidence",
+        remote_side="CandidateEvidence.id",
+        foreign_keys=[supersedes_evidence_id],
+        back_populates="superseded_by",
+    )
+    superseded_by: Mapped[list[CandidateEvidence]] = relationship(
+        "CandidateEvidence",
+        foreign_keys=[supersedes_evidence_id],
+        back_populates="supersedes",
+        order_by="CandidateEvidence.id",
     )
 
 

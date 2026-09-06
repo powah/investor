@@ -18,6 +18,7 @@ from app.scanner_sessions.domain import (
 )
 from app.scanner_sessions.module import (
     ScannerSessionActive,
+    ScannerSessionCandidateNotFound,
     ScannerSessionNotFound,
     ScannerSessions,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "ExchangeSessionIdentity",
     "MarketMovementDiscovery",
     "ScannerSessionActive",
+    "ScannerSessionCandidateNotFound",
     "ScannerSessionNotFound",
     "ScannerSessions",
     "get_scanner_sessions",

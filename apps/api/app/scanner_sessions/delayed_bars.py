@@ -163,7 +163,7 @@ class AlpacaDelayedBarDiscovery:
         observed_at = self._clock()
         hits: list[NormalizedDiscoveryHit] = []
         event_times: dict[str, str] = {}
-        reasons: dict[str, list[str]] = {}
+        evidence: dict[str, list[tuple[str, float, str]]] = {}
         for symbol, observations in bars.items():
             if not observations:
                 continue
@@ -172,19 +172,30 @@ class AlpacaDelayedBarDiscovery:
             closing = observations[times[-1]][1]
             volume = sum(bar[2] for bar in observations.values())
             move_pct = (closing / opening - 1) * 100
+            normalized_move_pct = round(move_pct, 6)
             event_times[symbol] = times[-1].isoformat()
-            reasons[symbol] = []
+            evidence[symbol] = []
             if abs(move_pct) >= policy["minimum_absolute_move_pct"]:
-                reasons[symbol].append(f"Market movement: {move_pct:+.2f}% first open to last close in the delayed 60-minute window")
+                evidence[symbol].append((
+                    "market_movement",
+                    normalized_move_pct,
+                    f"Market movement: {move_pct:+.2f}% first open to last close in the delayed 60-minute window",
+                ))
             if volume >= policy["minimum_volume"]:
-                reasons[symbol].append(f"Activity: {volume:,.0f} shares in the delayed 60-minute window")
+                evidence[symbol].append((
+                    "volume",
+                    float(volume),
+                    f"Activity: {volume:,.0f} shares in the delayed 60-minute window",
+                ))
         for listing in self._universe:
-            for reason in reasons.get(listing.ticker, []):
+            for evidence_type, evidence_value, reason in evidence.get(listing.ticker, []):
                 hits.append(listing.model_copy(update={
                     "source": self.source,
                     "source_reference": f"{listing.source_reference}:bar:{event_times[listing.ticker]}",
                     "observed_at": observed_at,
                     "discovery_reason": reason,
+                    "evidence_type": evidence_type,
+                    "evidence_value": evidence_value,
                     "provenance": {
                         "data_tier": "delayed_consolidated", "feed": "sip",
                         "coverage": "consolidated_us_equities",

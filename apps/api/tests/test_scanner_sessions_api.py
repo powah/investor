@@ -410,6 +410,7 @@ def test_manual_and_csv_hits_are_retained_admitted_and_deduplicated_by_security(
     assert sint["discovery_sources"] == ["manual", "csv"]
     assert sint["discovery_reasons"] == ["Manual catalyst follow-up", "CSV high-volume screen"]
     assert len(sint["discovery_hit_ids"]) == 2
+    assert sint["evidence"] == []
     assert {listing["ticker"] for listing in sint["observed_listings"]} == {"SINT", "SNTX"}
     ads = next(candidate for candidate in candidates if candidate["security"]["identifier"] == "security-abvc")
     assert ads["observed_listings"][0]["instrument_type"] == "american_depositary_share"

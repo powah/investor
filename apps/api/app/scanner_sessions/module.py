@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.scanner_sessions import (
+    CandidateEvidence,
     DiscoveryHit,
     Listing,
     ScannerSession,
@@ -29,7 +30,14 @@ from app.scanner_sessions.domain import (
     resolve_exchange_session_identity,
     utc_now,
 )
+from app.scanner_sessions.evidence import (
+    append_candidate_evidence,
+    evaluate_current_freshness,
+    supports_current_positive,
+)
 from app.schemas.scanner_sessions import (
+    CandidateEvidenceCreate,
+    CandidateEvidenceRead,
     CandidateRead,
     DiscoveryHitRead,
     ListingObservationRead,
@@ -77,6 +85,10 @@ _INTERRUPTED_FAILURE = _ScannerRunFailure(
 
 
 class ScannerSessionNotFound(LookupError):
+    pass
+
+
+class ScannerSessionCandidateNotFound(LookupError):
     pass
 
 
@@ -129,7 +141,7 @@ class ScannerSessions:
             if active is not None:
                 if supplementary_inputs:
                     raise ScannerSessionActive(active.id)
-                return self._read(active)
+                return self._read(active, evaluated_at=self._clock())
 
             started_at = self._clock()
             identity = resolve_exchange_session_identity(started_at)
@@ -177,10 +189,10 @@ class ScannerSessions:
                     raise
                 if supplementary_inputs:
                     raise ScannerSessionActive(active.id)
-                return self._read(active)
+                return self._read(active, evaluated_at=self._clock())
             db.refresh(session)
             session_id = session.id
-            result = self._read(self._by_id(db, session_id))
+            result = self._read(self._by_id(db, session_id), evaluated_at=self._clock())
 
         task = asyncio.create_task(self._run(session_id, sources))
         self._runs[session_id] = task
@@ -240,7 +252,58 @@ class ScannerSessions:
     def get(self, session_id: int) -> ScannerSessionRead:
         self.recover_interrupted()
         with self._session_factory() as db:
-            return self._read(self._by_id(db, session_id))
+            return self._read(self._by_id(db, session_id), evaluated_at=self._clock())
+
+    def add_evidence(
+        self,
+        session_id: int,
+        candidate_id: int,
+        payload: CandidateEvidenceCreate,
+    ) -> CandidateEvidenceRead:
+        with self._session_factory() as db:
+            candidate = (
+                db.query(ScannerSessionCandidate)
+                .filter(
+                    ScannerSessionCandidate.id == candidate_id,
+                    ScannerSessionCandidate.scanner_session_id == session_id,
+                )
+                .one_or_none()
+            )
+            if candidate is None:
+                session_exists = (
+                    db.query(ScannerSession.id)
+                    .filter(ScannerSession.id == session_id)
+                    .scalar()
+                )
+                if session_exists is None:
+                    raise ScannerSessionNotFound(
+                        f"Scanner Session {session_id} was not found."
+                    )
+                raise ScannerSessionCandidateNotFound(
+                    f"Candidate {candidate_id} was not found in Scanner Session {session_id}."
+                )
+            evaluated_at = self._clock()
+            evidence = append_candidate_evidence(
+                db,
+                candidate=candidate,
+                evidence_type=payload.evidence_type,
+                value_state=payload.value_state,
+                normalized_value=payload.normalized_value,
+                source_reference=payload.source_reference,
+                event_at=payload.event_at,
+                observed_at=payload.observed_at or evaluated_at,
+                data_tier=payload.data_tier,
+                expected_delay_seconds=payload.expected_delay_seconds,
+                evaluated_at=evaluated_at,
+                supersedes_evidence_id=payload.supersedes_evidence_id,
+                supersession_type=payload.supersession_type,
+            )
+            db.commit()
+            return self._evidence_read(
+                evidence,
+                candidate_evidence=(evidence,),
+                evaluated_at=evaluated_at,
+            )
 
     def current(self) -> ScannerSessionRead | None:
         self.recover_interrupted()
@@ -261,7 +324,7 @@ class ScannerSessions:
             for session in sessions:
                 max_age = session.scanner_policy_settings.get("currentness_max_age_seconds", 900)
                 if timedelta(0) <= now - session.started_at <= timedelta(seconds=max_age):
-                    return self._read(self._by_id(db, session.id))
+                    return self._read(self._by_id(db, session.id), evaluated_at=now)
         return None
 
     async def cancel(self, session_id: int) -> ScannerSessionRead:
@@ -284,7 +347,7 @@ class ScannerSessions:
                         diagnostic.message = "Cancelled by the operator."
                         diagnostic.completed_at = session.completed_at
                 db.commit()
-            result = self._read(session)
+            result = self._read(session, evaluated_at=self._clock())
         task = self._runs.get(session_id)
         if task is not None:
             task.cancel()
@@ -577,6 +640,7 @@ class ScannerSessions:
             selectinload(ScannerSession.candidates)
             .selectinload(ScannerSessionCandidate.discovery_hits)
             .selectinload(DiscoveryHit.listing),
+            selectinload(ScannerSession.candidates).selectinload(ScannerSessionCandidate.evidence),
         )
 
     @staticmethod
@@ -634,7 +698,12 @@ class ScannerSessions:
         )
 
     @classmethod
-    def _read(cls, session: ScannerSession) -> ScannerSessionRead:
+    def _read(
+        cls,
+        session: ScannerSession,
+        *,
+        evaluated_at: datetime,
+    ) -> ScannerSessionRead:
         total = session.progress_total
         percent = round((session.progress_completed / total) * 100) if total else 0
         return ScannerSessionRead(
@@ -686,7 +755,10 @@ class ScannerSessions:
                 )
                 for hit in session.discovery_hits
             ],
-            candidates=[cls._candidate_read(candidate) for candidate in session.candidates],
+            candidates=[
+                cls._candidate_read(candidate, evaluated_at=evaluated_at)
+                for candidate in session.candidates
+            ],
         )
 
     @staticmethod
@@ -702,8 +774,61 @@ class ScannerSessions:
             depositary_to_underlying_ratio=hit.observed_depositary_to_underlying_ratio,
         )
 
+    @staticmethod
+    def _evidence_read(
+        evidence: CandidateEvidence,
+        *,
+        candidate_evidence: tuple[CandidateEvidence, ...] | list[CandidateEvidence],
+        evaluated_at: datetime,
+    ) -> CandidateEvidenceRead:
+        superseded_by_evidence_ids = [
+            item.id
+            for item in candidate_evidence
+            if item.supersedes_evidence_id == evidence.id
+        ]
+        current_assessment = evaluate_current_freshness(
+            evidence,
+            evaluated_at=evaluated_at,
+        )
+        return CandidateEvidenceRead(
+            id=evidence.id,
+            evidence_type=evidence.evidence_type,
+            value_state=evidence.value_state,
+            normalized_value=evidence.normalized_value,
+            source_reference=evidence.source_reference,
+            event_at=evidence.event_at,
+            observed_at=evidence.observed_at,
+            data_tier=evidence.data_tier,
+            expected_delay_seconds=evidence.expected_delay_seconds,
+            recorded_freshness_policy_version=evidence.freshness_policy_version,
+            recorded_freshness_result=evidence.freshness_result,
+            recorded_freshness_reason=evidence.freshness_reason,
+            recorded_event_age_seconds=evidence.event_age_seconds,
+            recorded_observation_age_seconds=evidence.observation_age_seconds,
+            recorded_freshness_evaluated_at=evidence.freshness_evaluated_at,
+            current_freshness_result=current_assessment.result,
+            current_freshness_reason=current_assessment.reason,
+            current_event_age_seconds=current_assessment.event_age_seconds,
+            current_observation_age_seconds=current_assessment.observation_age_seconds,
+            current_freshness_evaluated_at=evaluated_at,
+            supersedes_evidence_id=evidence.supersedes_evidence_id,
+            supersession_type=evidence.supersession_type,
+            superseded_by_evidence_ids=superseded_by_evidence_ids,
+            supports_current_positive=supports_current_positive(
+                evidence,
+                superseded=bool(superseded_by_evidence_ids),
+                evaluated_at=evaluated_at,
+                assessment=current_assessment,
+            ),
+        )
+
     @classmethod
-    def _candidate_read(cls, candidate: ScannerSessionCandidate) -> CandidateRead:
+    def _candidate_read(
+        cls,
+        candidate: ScannerSessionCandidate,
+        *,
+        evaluated_at: datetime,
+    ) -> CandidateRead:
         listings: list[ListingRead] = []
         listing_snapshots: set[tuple[object, ...]] = set()
         sources: list[str] = []
@@ -732,4 +857,12 @@ class ScannerSessions:
             discovery_hit_ids=[hit.id for hit in candidate.discovery_hits],
             discovery_sources=sources,
             discovery_reasons=reasons,
+            evidence=[
+                cls._evidence_read(
+                    evidence,
+                    candidate_evidence=candidate.evidence,
+                    evaluated_at=evaluated_at,
+                )
+                for evidence in candidate.evidence
+            ],
         )

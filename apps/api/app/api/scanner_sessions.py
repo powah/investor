@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 
 from app.scanner_sessions import (
     ScannerSessionActive,
+    ScannerSessionCandidateNotFound,
     ScannerSessionNotFound,
     ScannerSessions,
     get_scanner_sessions,
@@ -12,10 +13,16 @@ from app.scanner_sessions.supplementary_csv import (
     parse_supplementary_csv,
 )
 from app.schemas.scanner_sessions import (
+    CandidateEvidenceCreate,
+    CandidateEvidenceRead,
     ScannerSessionRead,
     ScannerSessionStart,
     ScannerSessionSummaryRead,
     SupplementaryDiscoveryInput,
+)
+from app.scanner_sessions.evidence import (
+    CandidateEvidenceNotFound,
+    CandidateEvidenceValidationError,
 )
 
 
@@ -106,3 +113,26 @@ def get_scanner_session(
         return scanner_sessions.get(session_id)
     except ScannerSessionNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{session_id}/candidates/{candidate_id}/evidence",
+    response_model=CandidateEvidenceRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def append_candidate_evidence(
+    session_id: int,
+    candidate_id: int,
+    payload: CandidateEvidenceCreate,
+    scanner_sessions: ScannerSessions = Depends(get_scanner_sessions),
+) -> CandidateEvidenceRead:
+    try:
+        return scanner_sessions.add_evidence(session_id, candidate_id, payload)
+    except (
+        ScannerSessionNotFound,
+        ScannerSessionCandidateNotFound,
+        CandidateEvidenceNotFound,
+    ) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CandidateEvidenceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc

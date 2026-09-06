@@ -12,6 +12,7 @@ from app.models.integrations import (
 )
 from app.models.legacy_imports import LegacyImport
 from app.models.scanner_sessions import (
+    CandidateEvidence,
     DiscoveryHit,
     Listing,
     ScannerSession,
@@ -27,6 +28,7 @@ __all__ = [
     "BrokerOrderEvent",
     "BrokerStreamState",
     "BrokerTradeUpdate",
+    "CandidateEvidence",
     "Catalyst",
     "DiscoveryHit",
     "ExecutionIntent",
