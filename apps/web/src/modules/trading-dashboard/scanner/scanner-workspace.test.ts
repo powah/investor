@@ -314,7 +314,92 @@ describe("scanner workspace", () => {
           discovery_hit_ids: [30],
           discovery_sources: ["csv"],
           discovery_reasons: ["CSV activity screen"],
-          evidence: [],
+          evidence: [
+            {
+              id: 41,
+              evidence_type: "market_price",
+              value_state: "known",
+              normalized_value: 2.35,
+              source_reference: "quote:alfa:current",
+              event_at: "2026-08-09T07:59:00Z",
+              observed_at: "2026-08-09T08:00:00Z",
+              data_tier: "delayed_consolidated",
+              expected_delay_seconds: 900,
+              freshness_policy_version: "candidate-evidence-v1",
+              freshness_result: "fresh",
+              freshness_reason: "within_policy_limits",
+              event_age_seconds: 60,
+              observation_age_seconds: 0,
+              freshness_evaluated_at: "2026-08-09T08:00:00Z",
+              supersedes_evidence_id: null,
+              supersession_type: null,
+              superseded_by_evidence_ids: [42],
+              supports_current_positive: true,
+            },
+            {
+              id: 42,
+              evidence_type: "market_price",
+              value_state: "verified_negative",
+              normalized_value: false,
+              source_reference: "quote:alfa:correction",
+              event_at: "2026-08-09T07:30:00Z",
+              observed_at: "2026-08-09T08:00:00Z",
+              data_tier: "delayed_consolidated",
+              expected_delay_seconds: 900,
+              freshness_policy_version: "candidate-evidence-v1",
+              freshness_result: "stale",
+              freshness_reason: "provider_event_too_old",
+              event_age_seconds: 1800,
+              observation_age_seconds: 0,
+              freshness_evaluated_at: "2026-08-09T08:00:00Z",
+              supersedes_evidence_id: 41,
+              supersession_type: "correction",
+              superseded_by_evidence_ids: [43],
+              supports_current_positive: false,
+            },
+            {
+              id: 43,
+              evidence_type: "market_price",
+              value_state: "known",
+              normalized_value: 2.42,
+              source_reference: "quote:alfa:observation",
+              event_at: "2026-08-09T08:01:00Z",
+              observed_at: "2026-08-09T08:02:00Z",
+              data_tier: "delayed_consolidated",
+              expected_delay_seconds: 900,
+              freshness_policy_version: "candidate-evidence-v1",
+              freshness_result: "fresh",
+              freshness_reason: "within_policy_limits",
+              event_age_seconds: 60,
+              observation_age_seconds: 0,
+              freshness_evaluated_at: "2026-08-09T08:02:00Z",
+              supersedes_evidence_id: 42,
+              supersession_type: "new_observation",
+              superseded_by_evidence_ids: [],
+              supports_current_positive: true,
+            },
+            {
+              id: 44,
+              evidence_type: "above_vwap",
+              value_state: "unknown",
+              normalized_value: null,
+              source_reference: "quote:alfa:missing-vwap",
+              event_at: null,
+              observed_at: "2026-08-09T08:02:00Z",
+              data_tier: "delayed_consolidated",
+              expected_delay_seconds: 900,
+              freshness_policy_version: "candidate-evidence-v1",
+              freshness_result: "unknown",
+              freshness_reason: "event_time_missing",
+              event_age_seconds: null,
+              observation_age_seconds: 0,
+              freshness_evaluated_at: "2026-08-09T08:02:00Z",
+              supersedes_evidence_id: null,
+              supersession_type: null,
+              superseded_by_evidence_ids: [],
+              supports_current_positive: false,
+            },
+          ],
         },
       ],
     });
@@ -338,6 +423,22 @@ describe("scanner workspace", () => {
     expect(screen.getByRole("region", { name: "Admitted Candidates" })).toHaveTextContent("Alpha Research Corp");
     expect(within(screen.getByRole("region", { name: "Admitted Candidates" })).getByText("ALFA, ALFB", { exact: true })).toBeInTheDocument();
     expect(screen.getByText(/supplementary\.csv:2/)).toBeInTheDocument();
+
+    const evidenceRegion = screen.getByLabelText("Candidate Evidence");
+    expect(evidenceRegion).toHaveTextContent("Candidate Evidence (4)");
+    expect(evidenceRegion).toHaveTextContent("known");
+    expect(evidenceRegion).toHaveTextContent("verified negative");
+    expect(evidenceRegion).toHaveTextContent("unknown");
+    expect(evidenceRegion).toHaveTextContent("fresh");
+    expect(evidenceRegion).toHaveTextContent("stale");
+    expect(evidenceRegion).toHaveTextContent("delayed_consolidated");
+    expect(evidenceRegion).toHaveTextContent("15 min expected delay");
+    expect(evidenceRegion).toHaveTextContent("Event/as-of:");
+    expect(evidenceRegion).toHaveTextContent("Observed:");
+    expect(evidenceRegion).toHaveTextContent("Source: quote:alfa:current");
+    expect(evidenceRegion).toHaveTextContent("correction of Evidence #41");
+    expect(evidenceRegion).toHaveTextContent("new observation of Evidence #42");
+    expect(evidenceRegion).toHaveTextContent("Superseded by Evidence #42");
   });
 
   test("labels delayed consolidated discovery and a successful zero-Candidate result", () => {

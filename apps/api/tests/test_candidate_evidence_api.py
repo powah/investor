@@ -1,6 +1,7 @@
 """HTTP coverage for immutable Candidate Evidence and freshness states."""
 
 import asyncio
+from datetime import timedelta
 from typing import Iterator
 
 from fastapi import FastAPI
@@ -47,7 +48,15 @@ def _candidate_hit(**changes) -> NormalizedDiscoveryHit:
 
 
 @pytest.fixture
-def evidence_client(scanner_database_url: str) -> Iterator[TestClient]:
+def evidence_clock() -> list:
+    return [FIXED_START]
+
+
+@pytest.fixture
+def evidence_client(
+    scanner_database_url: str,
+    evidence_clock: list,
+) -> Iterator[TestClient]:
     engine = create_engine(scanner_database_url, pool_pre_ping=True)
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     discovery = ControlledDiscovery(
@@ -65,7 +74,7 @@ def evidence_client(scanner_database_url: str) -> Iterator[TestClient]:
     scanner_sessions = ScannerSessions(
         session_factory,
         discovery_factory=lambda started_at: discovery,
-        clock=lambda: FIXED_START,
+        clock=lambda: evidence_clock[0],
     )
     app = FastAPI()
     app.include_router(router)
@@ -116,6 +125,25 @@ def test_delayed_consolidated_discovery_is_recorded_as_fresh_candidate_evidence(
     }
 
 
+def test_fresh_evidence_stops_supporting_current_positives_as_time_passes(
+    evidence_client: TestClient,
+    evidence_clock: list,
+):
+    session = _start_completed_session(evidence_client)
+    candidate = session["candidates"][0]
+    initial = candidate["evidence"][0]
+    assert initial["freshness_result"] == "fresh"
+    assert initial["supports_current_positive"] is True
+
+    evidence_clock[0] = FIXED_START + timedelta(minutes=16)
+    reread = evidence_client.get(f"/scanner-sessions/{session['id']}")
+
+    assert reread.status_code == 200
+    current = reread.json()["candidates"][0]["evidence"][0]
+    assert current["freshness_result"] == "fresh"
+    assert current["supports_current_positive"] is False
+
+
 def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history(
     evidence_client: TestClient,
 ):
@@ -142,6 +170,24 @@ def test_http_evidence_distinguishes_stale_unknown_verified_negative_and_history
     assert stale["freshness_reason"] == "provider_event_too_old"
     assert stale["event_age_seconds"] == 1860.0
     assert stale["supports_current_positive"] is False
+
+    mismatched_correction = evidence_client.post(
+        candidate_url,
+        json={
+            "evidence_type": "above_vwap",
+            "value_state": "verified_negative",
+            "normalized_value": False,
+            "source_reference": "quote:sint:mismatched-correction",
+            "event_at": "2026-07-06T13:44:00Z",
+            "observed_at": "2026-07-06T13:45:00Z",
+            "data_tier": "delayed_consolidated",
+            "expected_delay_seconds": 900,
+            "supersedes_evidence_id": stale["id"],
+            "supersession_type": "correction",
+        },
+    )
+    assert mismatched_correction.status_code == 422
+    assert "same evidence type" in mismatched_correction.json()["detail"]
 
     unknown_response = evidence_client.post(
         candidate_url,

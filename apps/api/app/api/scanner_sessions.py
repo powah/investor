@@ -20,7 +20,10 @@ from app.schemas.scanner_sessions import (
     ScannerSessionSummaryRead,
     SupplementaryDiscoveryInput,
 )
-from app.scanner_sessions.evidence import CandidateEvidenceNotFound
+from app.scanner_sessions.evidence import (
+    CandidateEvidenceNotFound,
+    CandidateEvidenceValidationError,
+)
 
 
 router = APIRouter(prefix="/scanner-sessions", tags=["scanner-sessions"])
@@ -125,5 +128,11 @@ def append_candidate_evidence(
 ) -> CandidateEvidenceRead:
     try:
         return scanner_sessions.add_evidence(session_id, candidate_id, payload)
-    except (ScannerSessionNotFound, ScannerSessionCandidateNotFound, CandidateEvidenceNotFound) as exc:
+    except (
+        ScannerSessionNotFound,
+        ScannerSessionCandidateNotFound,
+        CandidateEvidenceNotFound,
+    ) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CandidateEvidenceValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc

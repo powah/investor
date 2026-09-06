@@ -59,6 +59,10 @@ class CandidateEvidenceNotFound(LookupError):
     pass
 
 
+class CandidateEvidenceValidationError(ValueError):
+    pass
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Candidate Evidence times must include a timezone")
@@ -192,18 +196,23 @@ def append_candidate_evidence(
 ) -> CandidateEvidence:
     """Append one immutable Candidate Evidence row and flush its identifier."""
 
+    normalized_type = evidence_type.strip().lower()
+    if not normalized_type:
+        raise CandidateEvidenceValidationError("Evidence type must not be empty")
     if value_state not in {"known", "unknown", "verified_negative"}:
-        raise ValueError("Unsupported Candidate Evidence value state")
+        raise CandidateEvidenceValidationError("Unsupported Candidate Evidence value state")
     if value_state == "unknown" and normalized_value is not None:
-        raise ValueError("Unknown Evidence must not carry a normalized value")
+        raise CandidateEvidenceValidationError("Unknown Evidence must not carry a normalized value")
     if value_state != "unknown" and normalized_value is None:
-        raise ValueError("Known and Verified Negative Evidence require a normalized value")
+        raise CandidateEvidenceValidationError(
+            "Known and Verified Negative Evidence require a normalized value"
+        )
     if (supersedes_evidence_id is None) != (supersession_type is None):
-        raise ValueError(
+        raise CandidateEvidenceValidationError(
             "supersedes_evidence_id and supersession_type must be provided together"
         )
     if supersession_type not in {None, "correction", "new_observation"}:
-        raise ValueError("Unsupported Candidate Evidence supersession type")
+        raise CandidateEvidenceValidationError("Unsupported Candidate Evidence supersession type")
 
     if supersedes_evidence_id is not None:
         previous = (
@@ -218,11 +227,14 @@ def append_candidate_evidence(
             raise CandidateEvidenceNotFound(
                 f"Candidate Evidence {supersedes_evidence_id} was not found for Candidate {candidate.id}."
             )
+        if previous.evidence_type != normalized_type:
+            raise CandidateEvidenceValidationError(
+                "Candidate Evidence supersession must use the same evidence type as its predecessor"
+            )
 
     observed_time = _utc(observed_at)
     evaluated_time = _utc(evaluated_at)
     event_time = _utc(event_at) if event_at is not None else None
-    normalized_type = evidence_type.strip().lower()
     normalized_tier = data_tier.strip().lower()
     resolved_expected_delay = expected_delay_seconds
     if resolved_expected_delay is None and normalized_tier in {"delayed_consolidated", "delayed_sip"}:
@@ -295,11 +307,23 @@ def supports_current_positive(
     evidence: CandidateEvidence,
     *,
     superseded: bool = False,
+    evaluated_at: datetime | None = None,
 ) -> bool:
-    """Only fresh, known, current evidence may support a positive conclusion."""
+    """Only currently fresh, known, current evidence may support a positive conclusion.
 
-    return (
-        not superseded
-        and evidence.value_state == "known"
-        and evidence.freshness_result == "fresh"
+    The persisted freshness fields describe the assessment made when this row
+    was appended. Current support is reevaluated at the decision boundary so a
+    formerly fresh observation cannot remain eligible forever.
+    """
+
+    if superseded or evidence.value_state != "known":
+        return False
+    assessment = evaluate_freshness(
+        evidence_type=evidence.evidence_type,
+        data_tier=evidence.data_tier,
+        event_at=evidence.event_at,
+        observed_at=evidence.observed_at,
+        evaluated_at=evaluated_at or datetime.now(timezone.utc),
+        policy_version=evidence.freshness_policy_version,
     )
+    return assessment.result == "fresh"

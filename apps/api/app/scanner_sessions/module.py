@@ -140,7 +140,7 @@ class ScannerSessions:
             if active is not None:
                 if supplementary_inputs:
                     raise ScannerSessionActive(active.id)
-                return self._read(active)
+                return self._read(active, evaluated_at=self._clock())
 
             started_at = self._clock()
             identity = resolve_exchange_session_identity(started_at)
@@ -188,10 +188,10 @@ class ScannerSessions:
                     raise
                 if supplementary_inputs:
                     raise ScannerSessionActive(active.id)
-                return self._read(active)
+                return self._read(active, evaluated_at=self._clock())
             db.refresh(session)
             session_id = session.id
-            result = self._read(self._by_id(db, session_id))
+            result = self._read(self._by_id(db, session_id), evaluated_at=self._clock())
 
         task = asyncio.create_task(self._run(session_id, sources))
         self._runs[session_id] = task
@@ -251,7 +251,7 @@ class ScannerSessions:
     def get(self, session_id: int) -> ScannerSessionRead:
         self.recover_interrupted()
         with self._session_factory() as db:
-            return self._read(self._by_id(db, session_id))
+            return self._read(self._by_id(db, session_id), evaluated_at=self._clock())
 
     def add_evidence(
         self,
@@ -286,7 +286,11 @@ class ScannerSessions:
                 supersession_type=payload.supersession_type,
             )
             db.commit()
-            return self._evidence_read(evidence, candidate_evidence=(evidence,))
+            return self._evidence_read(
+                evidence,
+                candidate_evidence=(evidence,),
+                evaluated_at=evaluated_at,
+            )
 
     def current(self) -> ScannerSessionRead | None:
         self.recover_interrupted()
@@ -307,7 +311,7 @@ class ScannerSessions:
             for session in sessions:
                 max_age = session.scanner_policy_settings.get("currentness_max_age_seconds", 900)
                 if timedelta(0) <= now - session.started_at <= timedelta(seconds=max_age):
-                    return self._read(self._by_id(db, session.id))
+                    return self._read(self._by_id(db, session.id), evaluated_at=now)
         return None
 
     async def cancel(self, session_id: int) -> ScannerSessionRead:
@@ -330,7 +334,7 @@ class ScannerSessions:
                         diagnostic.message = "Cancelled by the operator."
                         diagnostic.completed_at = session.completed_at
                 db.commit()
-            result = self._read(session)
+            result = self._read(session, evaluated_at=self._clock())
         task = self._runs.get(session_id)
         if task is not None:
             task.cancel()
@@ -681,7 +685,12 @@ class ScannerSessions:
         )
 
     @classmethod
-    def _read(cls, session: ScannerSession) -> ScannerSessionRead:
+    def _read(
+        cls,
+        session: ScannerSession,
+        *,
+        evaluated_at: datetime,
+    ) -> ScannerSessionRead:
         total = session.progress_total
         percent = round((session.progress_completed / total) * 100) if total else 0
         return ScannerSessionRead(
@@ -733,7 +742,10 @@ class ScannerSessions:
                 )
                 for hit in session.discovery_hits
             ],
-            candidates=[cls._candidate_read(candidate) for candidate in session.candidates],
+            candidates=[
+                cls._candidate_read(candidate, evaluated_at=evaluated_at)
+                for candidate in session.candidates
+            ],
         )
 
     @staticmethod
@@ -754,6 +766,7 @@ class ScannerSessions:
         evidence: CandidateEvidence,
         *,
         candidate_evidence: tuple[CandidateEvidence, ...] | list[CandidateEvidence],
+        evaluated_at: datetime,
     ) -> CandidateEvidenceRead:
         superseded_by_evidence_ids = [
             item.id
@@ -782,11 +795,17 @@ class ScannerSessions:
             supports_current_positive=supports_current_positive(
                 evidence,
                 superseded=bool(superseded_by_evidence_ids),
+                evaluated_at=evaluated_at,
             ),
         )
 
     @classmethod
-    def _candidate_read(cls, candidate: ScannerSessionCandidate) -> CandidateRead:
+    def _candidate_read(
+        cls,
+        candidate: ScannerSessionCandidate,
+        *,
+        evaluated_at: datetime,
+    ) -> CandidateRead:
         listings: list[ListingRead] = []
         listing_snapshots: set[tuple[object, ...]] = set()
         sources: list[str] = []
@@ -816,7 +835,11 @@ class ScannerSessions:
             discovery_sources=sources,
             discovery_reasons=reasons,
             evidence=[
-                cls._evidence_read(evidence, candidate_evidence=candidate.evidence)
+                cls._evidence_read(
+                    evidence,
+                    candidate_evidence=candidate.evidence,
+                    evaluated_at=evaluated_at,
+                )
                 for evidence in candidate.evidence
             ],
         )
